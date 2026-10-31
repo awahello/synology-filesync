@@ -142,7 +142,7 @@ button:disabled{opacity:.5;cursor:not-allowed}
     <div class="field small"><label for="retryMin">首轮失败重试</label><input id="retryMin" type="number" min="0" max="1440" value="60"></div>
     <div class="field tiny"><label>&nbsp;</label><span class="hint" style="margin:9px 0 0">分钟</span></div>
   </div>
-  <p class="hint">首次运行延迟：保存后先等这么多分钟再跑第一轮，避免开机或刚装好时所有任务一起抢带宽。首轮失败重试：第一轮没成功就按这个间隔一直重试（默认 60 分钟），直到成功一次为止，之后回到执行间隔；填 0 表示失败不额外重试。</p>
+  <p class="hint">首次运行延迟：套件启动（开机）后、以及保存或启用规则后，先等这么多分钟再跑第一轮，避免开机时所有任务一起抢带宽。首轮失败重试：第一轮没成功就按这个间隔一直重试（默认 60 分钟），直到成功一次为止，之后回到执行间隔；填 0 表示失败不额外重试。</p>
   <div class="row" style="margin-top:12px">
     <div class="field"><label for="siteA">A 端站点</label><select id="siteA"></select></div>
     <div class="field"><label for="dirA">A 端目录</label>
@@ -212,6 +212,7 @@ button:disabled{opacity:.5;cursor:not-allowed}
     <div class="field small"><label for="gRetry">首轮失败重试</label><input id="gRetry" type="number" min="0" max="1440" value="60"></div>
     <div class="field tiny"><label>&nbsp;</label><span class="hint" style="margin:9px 0 0">分钟</span></div>
   </div>
+  <p class="hint">首次运行延迟：套件启动（开机）后、以及保存或启用同步组后，先等这么多分钟再跑第一轮。首轮失败重试：第一轮没成功就按这个间隔重试，直到成功一次为止；0 表示不额外重试。</p>
   <div style="margin-top:14px">
     <label style="display:block;margin-bottom:8px">成员（至少 2 个，必须包含本机）</label>
     <div id="gMemberList"></div>
@@ -1232,7 +1233,7 @@ function previewApi(action, data) {
   const now = new Date();
   const iso = m => new Date(now.getTime() - m * 60000).toISOString();
   const db = {
-    version: '0.3.8-0001',
+    version: '0.3.9-0001',
     settings: { trash_days: '30', conflict_copy: '1', worker_paused: '0' },
     sites: [
       { id: 'local', name: '本机 · DiskStation', kind: 'local', host: '', port: 22, ssh_user: '', key_id: '', note: '', last_check: iso(3), last_ok: 1, last_check_msg: '本机路径可直接访问', caps_json: '{}' },

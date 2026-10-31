@@ -108,14 +108,22 @@ def clear_pid():
 
 
 def initialize_schedule(db):
-    """启动时修正过期计划：已过期的规则错开几秒后执行，而不是一起冲上去。"""
+    """套件启动（开机）时重排过期计划。
+
+    「首次运行延迟」在这里同样生效：开机后所有任务都是从零开始，与其一起冲
+    上去抢带宽、抢 CPU，不如先等用户设定的分钟数再跑第一轮。已经有未来计划
+    的任务（还没到点）不动，避免把正常的间隔排期往后拖。
+
+    多条任务还会各自错开 STARTUP_STAGGER 秒，防止延迟到点后同时开跑。
+    """
     now = common.now_local()
     offset = 0
     for table in ("rules", "groups"):
         for row in db.execute("SELECT * FROM %s WHERE enabled=1 ORDER BY created" % table).fetchall():
             due = common.parse_iso(row["next_run"])
             if due is None or due <= now:
-                target = (now + dt.timedelta(seconds=5 + offset)).isoformat(timespec="seconds")
+                delay = max(0, int(row["start_delay_min"] or 0))
+                target = (now + dt.timedelta(minutes=delay, seconds=5 + offset)).isoformat(timespec="seconds")
                 db.execute("UPDATE %s SET next_run=? WHERE id=?" % table, (target, row["id"]))
                 offset += STARTUP_STAGGER
     db.commit()

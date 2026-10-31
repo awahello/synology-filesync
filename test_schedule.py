@@ -1,5 +1,6 @@
-"""0.3.8 新功能测试：首次运行延迟、首轮失败重试排期、主机目录压缩备份。"""
+"""0.3.8/0.3.9 新功能测试：首次运行延迟（含开机）、首轮失败重试排期、主机目录压缩备份。"""
 
+import datetime as dt
 import io
 import json
 import os
@@ -169,6 +170,39 @@ check("retry_min=0 时不额外重试", 9 <= gap <= 11 and note == "", "%.1f 分
 db.execute("DELETE FROM rules WHERE id=?", (task_id,))
 db.commit()
 
+# ---------------------------------------------------------------- 开机首次运行延迟
+print("\n=== 开机（套件启动）首次运行延迟 ===")
+boot_id = str(uuid.uuid4())
+past = (common.now_local() - dt.timedelta(hours=3)).isoformat(timespec="seconds")
+future = (common.now_local() + dt.timedelta(hours=2)).isoformat(timespec="seconds")
+db.execute("INSERT INTO rules(id,name,site_a,dir_a,site_b,dir_b,mode,delete_policy,excludes,"
+           "interval_min,start_delay_min,retry_min,enabled,next_run,created) "
+           "VALUES(?,?,'local','/a','local','/b','both','trash','',10,25,60,1,?,?)",
+           (boot_id, "开机延迟规则", past, common.now_iso()))
+kept_id = str(uuid.uuid4())
+db.execute("INSERT INTO rules(id,name,site_a,dir_a,site_b,dir_b,mode,delete_policy,excludes,"
+           "interval_min,start_delay_min,retry_min,enabled,next_run,created) "
+           "VALUES(?,?,'local','/a','local','/b','both','trash','',10,25,60,1,?,?)",
+           (kept_id, "未到点规则", future, common.now_iso()))
+db.commit()
+
+worker.initialize_schedule(db)
+row = db.execute("SELECT next_run FROM rules WHERE id=?", (boot_id,)).fetchone()
+gap = (common.parse_iso(row["next_run"]) - common.now_local()).total_seconds() / 60
+check("过期任务按开机延迟 25 分钟重排", 25 <= gap <= 26, "%.1f 分钟" % gap)
+row = db.execute("SELECT next_run FROM rules WHERE id=?", (kept_id,)).fetchone()
+check("还没到点的任务不被推迟", row["next_run"] == future, row["next_run"])
+
+db.execute("UPDATE rules SET start_delay_min=0 WHERE id=?", (boot_id,))
+db.execute("UPDATE rules SET next_run=? WHERE id=?", (past, boot_id))
+db.commit()
+worker.initialize_schedule(db)
+row = db.execute("SELECT next_run FROM rules WHERE id=?", (boot_id,)).fetchone()
+gap = (common.parse_iso(row["next_run"]) - common.now_local()).total_seconds()
+check("延迟为 0 时开机几秒内就开跑", 0 <= gap <= 30, "%.0f 秒" % gap)
+db.execute("DELETE FROM rules WHERE id IN (?,?)", (boot_id, kept_id))
+db.commit()
+
 # ---------------------------------------------------------------- 压缩备份与轮转
 print("\n=== 压缩备份与轮转 ===")
 root = Path(tempfile.mkdtemp(prefix="filesync-archive-"))
@@ -252,4 +286,4 @@ head, body = run(["cgi_app.py"], method="POST", body={"action": "run_backup", "k
 check("未启用备份时被拒", "400" in head and "启用" in json.loads(body)["error"], json.loads(body))
 
 db.close()
-print("\n0.3.8 新功能全部测试通过")
+print("\n0.3.9 新功能全部测试通过")
