@@ -16,6 +16,7 @@
 这就是 Syncthing 一类工具的核心思路，"最新文件"的判定就落在冲突分支上。
 """
 
+import datetime as dt
 import json
 import os
 import time
@@ -154,6 +155,56 @@ def run_backup(db, table, owner_id, force=False, log=None):
     db.commit()
     emit("压缩备份完成：" + message, "good")
     return dict(info, message=message, source=source, target=target)
+
+
+def schedule_backup(db, table, owner_id):
+    """同步成功后安排一次「延迟备份」：backup_due_at = now + backup_delay_min。
+
+    为什么不在这里直接打包：同步刚结束时文件可能还在落盘/被其它进程占用，
+    而且打包是重 IO，和同步挤在一起会互相拖慢。把打包延后 N 分钟（默认 5），
+    由 worker 的下一个 tick 里 run_due_backups 触发，等文件稳定后再压缩。
+
+    返回 (是否排期, 延迟分钟数)。没开备份 / 没填目录时不排期。
+    """
+    row = db.execute("SELECT * FROM %s WHERE id=?" % table, (owner_id,)).fetchone()
+    if not row or not row["backup_enabled"] or not row["backup_dir"]:
+        return False, 0
+    delay = int(row["backup_delay_min"] or 0)
+    if delay < 0:
+        delay = 0
+    due = (common.now_local() + dt.timedelta(minutes=delay)).isoformat(timespec="seconds")
+    db.execute("UPDATE %s SET backup_due_at=? WHERE id=?" % table, (due, owner_id))
+    db.commit()
+    return True, delay
+
+
+def run_due_backups(db, log=None):
+    """worker 每次 tick 调用：把已到点的延迟备份真正执行掉。
+
+    无论本次打包成功、被间隔节流跳过、还是失败，都清掉 backup_due_at，
+    避免同一次排期被反复触发；下一轮同步成功后会重新排期。
+    """
+    now = common.now_local()
+    results = []
+    for table in ("rules", "groups"):
+        rows = db.execute(
+            "SELECT id, name, backup_due_at FROM %s WHERE backup_due_at<>''" % table
+        ).fetchall()
+        for row in rows:
+            due = common.parse_iso(row["backup_due_at"])
+            if due is not None and due > now:
+                continue  # 还没到点
+            info = None
+            try:
+                info = run_backup(db, table, row["id"], log=log)
+            except RuleError as exc:
+                if log:
+                    log("warn", "延迟备份未完成：%s" % str(exc)[:200])
+            db.execute("UPDATE %s SET backup_due_at='' WHERE id=?" % table, (row["id"],))
+            db.commit()
+            if info:
+                results.append((table, row["name"], info))
+    return results
 
 
 def list_backups(db, table, owner_id):
@@ -423,14 +474,14 @@ def run_rule(db, rule_id, trigger="manual", log=None):
             remote.purge_trash(site_a, rule["dir_a"], keep_days)
             remote.purge_trash(site_b, rule["dir_b"], keep_days)
 
-        # 压缩备份：同步完成后按间隔把本机目录打成 tar.gz，失败只记日志不中断
+        # 压缩备份：同步成功后先排期，等 N 分钟（backup_delay_min，默认 5）再由
+        # worker 打包——避开同步刚结束时文件还在落盘、以及和同步抢 IO 的问题。
         try:
-            info = run_backup(db, "rules", rule_id, log=emit)
-            if info:
-                detail.append("压缩备份 %s（%s，保留 %d 份）" % (
-                    info["name"], common.human_size(info["size"]), info["keep"]))
+            scheduled, delay = schedule_backup(db, "rules", rule_id)
+            if scheduled:
+                detail.append("已安排在 %d 分钟后压缩备份" % delay if delay else "已安排压缩备份")
         except RuleError as exc:
-            detail.append("压缩备份未完成：%s" % str(exc)[:200])
+            detail.append("压缩备份排期失败：%s" % str(exc)[:200])
 
         stats = {
             "up": len(plan["a2b"]),
@@ -831,14 +882,13 @@ def run_group(db, group_id, trigger="manual", log=None):
             for member in members:
                 remote.purge_trash(member["site"], member["dir"], keep_days)
 
-        # 压缩备份：只备份本机（中转站）目录，避免各站重复打包同一批文件
+        # 压缩备份：只备份本机（中转站）目录，同步成功后延迟 N 分钟再由 worker 打包
         try:
-            info = run_backup(db, "groups", group_id, log=emit)
-            if info:
-                detail.append("压缩备份 %s（%s，保留 %d 份）" % (
-                    info["name"], common.human_size(info["size"]), info["keep"]))
+            scheduled, delay = schedule_backup(db, "groups", group_id)
+            if scheduled:
+                detail.append("已安排在 %d 分钟后压缩备份" % delay if delay else "已安排压缩备份")
         except RuleError as exc:
-            detail.append("压缩备份未完成：%s" % str(exc)[:200])
+            detail.append("压缩备份排期失败：%s" % str(exc)[:200])
 
         stats = {
             "pulled": pulled,

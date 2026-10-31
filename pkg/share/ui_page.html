@@ -185,8 +185,10 @@ button:disabled{opacity:.5;cursor:not-allowed}
     <div class="field small"><label for="backupKeep">保留份数</label><input id="backupKeep" type="number" min="1" max="999" value="7"></div>
     <div class="field small"><label for="backupHour">备份间隔</label><input id="backupHour" type="number" min="1" max="720" value="24"></div>
     <div class="field tiny"><label>&nbsp;</label><span class="hint" style="margin:9px 0 0">小时</span></div>
+    <div class="field small"><label for="backupDelay">备份延迟</label><input id="backupDelay" type="number" min="0" max="1440" value="5"></div>
+    <div class="field tiny"><label>&nbsp;</label><span class="hint" style="margin:9px 0 0">分钟</span></div>
   </div>
-  <p class="hint" id="backupHint">压缩备份在同步成功后触发：把本机那一端的目录打成 <code>目录名-日期-时间.tar.gz</code> 放进备份目录，超过保留份数就删最旧的。备份目录不能放在同步目录里面，否则备份包会被当成新文件同步出去。卡片上的「立即备份」是当场打包，目录很大时页面会等一会儿。</p>
+  <p class="hint" id="backupHint">压缩备份在同步成功后触发：先等「备份延迟」这么多分钟（默认 5），再把本机那一端的目录打成 <code>目录名-日期-时间.tar.gz</code> 放进备份目录，超过保留份数就删最旧的。「备份间隔」是两次打包之间的最短时间，没到间隔就跳过。备份目录不能放在同步目录里面，否则备份包会被当成新文件同步出去。卡片上的「立即备份」是当场打包，目录很大时页面会等一会儿。</p>
   <div class="row" style="margin-top:14px">
     <button id="saveRuleBtn">保存规则</button>
     <button class="secondary" id="cancelEditBtn" hidden>取消编辑</button>
@@ -240,8 +242,10 @@ button:disabled{opacity:.5;cursor:not-allowed}
     <div class="field small"><label for="gBackupKeep">保留份数</label><input id="gBackupKeep" type="number" min="1" max="999" value="7"></div>
     <div class="field small"><label for="gBackupHour">备份间隔</label><input id="gBackupHour" type="number" min="1" max="720" value="24"></div>
     <div class="field tiny"><label>&nbsp;</label><span class="hint" style="margin:9px 0 0">小时</span></div>
+    <div class="field small"><label for="gBackupDelay">备份延迟</label><input id="gBackupDelay" type="number" min="0" max="1440" value="5"></div>
+    <div class="field tiny"><label>&nbsp;</label><span class="hint" style="margin:9px 0 0">分钟</span></div>
   </div>
-  <p class="hint">压缩备份只打本机成员的目录（本机是中转站，数据最全），打包后按保留份数轮转。备份目录不能放在本机同步目录里面。</p>
+  <p class="hint">压缩备份只打本机成员的目录（本机是中转站，数据最全）：同步成功后先等「备份延迟」这么多分钟再打包，打包后按保留份数轮转。备份目录不能放在本机同步目录里面。</p>
   <div class="row" style="margin-top:14px">
     <button id="gSaveBtn">保存同步组</button>
     <button class="secondary" id="gCancelBtn" hidden>取消编辑</button>
@@ -627,8 +631,9 @@ function renderRules() {
       + (r.start_delay_min ? ' · 首轮延迟 ' + r.start_delay_min + ' 分钟' : '')
       + (r.retry_min ? ' · 首轮失败重试 ' + r.retry_min + ' 分钟' : ' · 失败不重试');
     const backup = r.backup_enabled
-      ? '<br>压缩备份：<code>' + esc(r.backup_dir || '（未填目录）') + '</code> · 每 ' + r.backup_interval_hour +
-        ' 小时 · 保留 ' + r.backup_keep + ' 份 · ' +
+      ? '<br>压缩备份：<code>' + esc(r.backup_dir || '（未填目录）') + '</code> · 同步成功后 ' + (r.backup_delay_min == null ? 5 : r.backup_delay_min) +
+        ' 分钟 · 每 ' + r.backup_interval_hour + ' 小时 · 保留 ' + r.backup_keep + ' 份 · ' +
+        (r.backup_due_at ? '已排期 ' + fmtTime(r.backup_due_at) + ' · ' : '') +
         (r.backup_last ? fmtTime(r.backup_last) + ' ' + esc(r.backup_msg || '') : '尚未备份')
       : '';
     el.innerHTML =
@@ -705,6 +710,7 @@ function resetGroupForm() {
   $('gBackupDir').value = '';
   $('gBackupKeep').value = '7';
   $('gBackupHour').value = '24';
+  $('gBackupDelay').value = '5';
   syncBackupOpts();
   const local = state.sites.find(s => s.kind === 'local');
   const others = state.sites.filter(s => s.kind !== 'local');
@@ -729,6 +735,7 @@ function editGroup(group) {
   $('gBackupDir').value = group.backup_dir || '';
   $('gBackupKeep').value = group.backup_keep || 7;
   $('gBackupHour').value = group.backup_interval_hour || 24;
+  $('gBackupDelay').value = group.backup_delay_min == null ? 5 : group.backup_delay_min;
   syncBackupOpts();
   groupMembers = (group.members || []).map(m => ({ site_id: m.site_id, dir: m.dir }));
   renderGroupMembers();
@@ -763,6 +770,7 @@ async function saveGroup() {
     backup_dir: $('gBackupDir').value.trim(),
     backup_keep: Number($('gBackupKeep').value || 7),
     backup_interval_hour: Number($('gBackupHour').value || 24),
+    backup_delay_min: Number($('gBackupDelay').value || 0),
     members: members
   };
   if (!payload.name) return notice('请填写组名称', 'error');
@@ -808,8 +816,9 @@ function renderGroups() {
       + (g.start_delay_min ? ' · 首轮延迟 ' + g.start_delay_min + ' 分钟' : '')
       + (g.retry_min ? ' · 首轮失败重试 ' + g.retry_min + ' 分钟' : ' · 失败不重试');
     const backup = g.backup_enabled
-      ? '<br>压缩备份：<code>' + esc(g.backup_dir || '（未填目录）') + '</code> · 每 ' + g.backup_interval_hour +
-        ' 小时 · 保留 ' + g.backup_keep + ' 份 · ' +
+      ? '<br>压缩备份：<code>' + esc(g.backup_dir || '（未填目录）') + '</code> · 同步成功后 ' + (g.backup_delay_min == null ? 5 : g.backup_delay_min) +
+        ' 分钟 · 每 ' + g.backup_interval_hour + ' 小时 · 保留 ' + g.backup_keep + ' 份 · ' +
+        (g.backup_due_at ? '已排期 ' + fmtTime(g.backup_due_at) + ' · ' : '') +
         (g.backup_last ? fmtTime(g.backup_last) + ' ' + esc(g.backup_msg || '') : '尚未备份')
       : '';
     el.innerHTML =
@@ -976,6 +985,7 @@ function editRule(rule) {
   $('backupDir').value = rule.backup_dir || '';
   $('backupKeep').value = rule.backup_keep || 7;
   $('backupHour').value = rule.backup_interval_hour || 24;
+  $('backupDelay').value = rule.backup_delay_min == null ? 5 : rule.backup_delay_min;
   syncBackupOpts();
   $('ruleFormCard').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
@@ -990,7 +1000,7 @@ function resetRuleForm() {
   $('intervalMin').value = '10'; $('ruleExcludes').value = '';
   $('startDelay').value = '0'; $('retryMin').value = '60';
   $('backupEnabled').value = '0'; $('backupDir').value = '';
-  $('backupKeep').value = '7'; $('backupHour').value = '24';
+  $('backupKeep').value = '7'; $('backupHour').value = '24'; $('backupDelay').value = '5';
   syncBackupOpts();
   const local = state.sites.find(s => s.kind === 'local');
   const remote = state.sites.find(s => s.kind !== 'local');
@@ -1015,7 +1025,8 @@ async function saveRule() {
     backup_enabled: $('backupEnabled').value,
     backup_dir: $('backupDir').value.trim(),
     backup_keep: Number($('backupKeep').value || 7),
-    backup_interval_hour: Number($('backupHour').value || 24)
+    backup_interval_hour: Number($('backupHour').value || 24),
+    backup_delay_min: Number($('backupDelay').value || 0)
   };
   if (!payload.name) return notice('请填写规则名称', 'error');
   if (payload.site_a === payload.site_b && payload.dir_a === payload.dir_b) return notice('两端不能是同一个目录', 'error');
@@ -1233,7 +1244,7 @@ function previewApi(action, data) {
   const now = new Date();
   const iso = m => new Date(now.getTime() - m * 60000).toISOString();
   const db = {
-    version: '0.3.13-0001',
+    version: '0.3.14-0001',
     settings: { trash_days: '30', conflict_copy: '1', worker_paused: '0' },
     sites: [
       { id: 'local', name: '本机 · DiskStation', kind: 'local', host: '', port: 22, ssh_user: '', key_id: '', note: '', last_check: iso(3), last_ok: 1, last_check_msg: '本机路径可直接访问', caps_json: '{}' },
@@ -1245,6 +1256,7 @@ function previewApi(action, data) {
       { id: 'g1', name: '三站照片互备', delete_policy: 'trash', excludes: '', interval_min: 10, enabled: 1,
         start_delay_min: 5, retry_min: 60,
         backup_enabled: 1, backup_dir: '/volume1/backup/photo', backup_keep: 7, backup_interval_hour: 24,
+        backup_delay_min: 5, backup_due_at: iso(-1),
         backup_last: iso(180), backup_msg: '成功：photo-20261030-020000.tar.gz（1.8 GB，保留 7 份）',
         next_run: iso(-8), last_run: iso(6), last_status: 'ok',
         last_message: '拉回 2，推送 4，删除 0，冲突 0',

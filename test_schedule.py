@@ -1,4 +1,4 @@
-"""0.3.8/0.3.9 新功能测试：首次运行延迟（含开机）、首轮失败重试排期、主机目录压缩备份。"""
+"""0.3.8–0.3.14 新功能测试：首次运行延迟（含开机）、首轮失败重试排期、压缩备份与轮转、延迟备份。"""
 
 import datetime as dt
 import io
@@ -285,5 +285,54 @@ head, body = run(["cgi_app.py"], method="POST", body={"action": "run_backup", "k
                  extra_env={"HTTP_X_CSRF_TOKEN": csrf_token})
 check("未启用备份时被拒", "400" in head and "启用" in json.loads(body)["error"], json.loads(body))
 
+# ---------------------------------------------------------------- 延迟备份
+print("\n=== 延迟备份（同步成功后 N 分钟）===")
+droot = Path(tempfile.mkdtemp(prefix="filesync-delay-"))
+dsrc = droot / "blog"
+(dsrc / "inc").mkdir(parents=True)
+(dsrc / "index.php").write_text("<?php echo 1;", encoding="utf-8")
+dtarget = droot / "bak"
+
+delay_task = str(uuid.uuid4())
+db.execute("INSERT INTO rules(id,name,site_a,dir_a,site_b,dir_b,mode,delete_policy,excludes,"
+           "interval_min,backup_enabled,backup_dir,backup_keep,backup_interval_hour,backup_delay_min,"
+           "enabled,next_run,created) "
+           "VALUES(?,?,'local',?,'local','/volume2/blog','both','trash','',60,1,?,3,1,5,1,?,?)",
+           (delay_task, "延迟备份规则", str(dsrc), str(dtarget), common.now_iso(), common.now_iso()))
+db.commit()
+
+scheduled, delay = engine.schedule_backup(db, "rules", delay_task)
+row = db.execute("SELECT backup_due_at FROM rules WHERE id=?", (delay_task,)).fetchone()
+gap = (common.parse_iso(row["backup_due_at"]) - common.now_local()).total_seconds() / 60
+check("同步成功后按 5 分钟排期", scheduled and delay == 5 and 4 <= gap <= 6, "%.1f 分钟" % gap)
+
+done = engine.run_due_backups(db)
+check("还没到点不打包", done == [] and len(archive.list_archives(str(dsrc), str(dtarget))) == 0, done)
+
+# 把排期改到过去，模拟 5 分钟已过
+past2 = (common.now_local() - dt.timedelta(seconds=5)).isoformat(timespec="seconds")
+db.execute("UPDATE rules SET backup_due_at=? WHERE id=?", (past2, delay_task))
+db.commit()
+done = engine.run_due_backups(db)
+row = db.execute("SELECT backup_due_at FROM rules WHERE id=?", (delay_task,)).fetchone()
+check("到点后真正打包", len(done) == 1 and len(archive.list_archives(str(dsrc), str(dtarget))) == 1, done)
+check("打包后清掉排期", row["backup_due_at"] == "", row["backup_due_at"])
+
+# 间隔（1 小时）未到时不重复打包，但排期照样清掉，避免反复触发
+db.execute("UPDATE rules SET backup_due_at=? WHERE id=?", (past2, delay_task))
+db.commit()
+done = engine.run_due_backups(db)
+row = db.execute("SELECT backup_due_at FROM rules WHERE id=?", (delay_task,)).fetchone()
+check("间隔未到则跳过打包", done == [] and row["backup_due_at"] == "", done)
+
+# 关掉备份后不排期
+db.execute("UPDATE rules SET backup_enabled=0 WHERE id=?", (delay_task,))
+db.commit()
+scheduled2, _ = engine.schedule_backup(db, "rules", delay_task)
+check("没开备份时不排期", scheduled2 is False)
+
+db.execute("DELETE FROM rules WHERE id=?", (delay_task,))
+db.commit()
+
 db.close()
-print("\n0.3.9 新功能全部测试通过")
+print("\n0.3.14 新功能全部测试通过")

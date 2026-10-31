@@ -73,6 +73,7 @@ def rule_public(row):
         "start_delay_min": row["start_delay_min"], "retry_min": row["retry_min"],
         "backup_enabled": row["backup_enabled"], "backup_dir": row["backup_dir"],
         "backup_keep": row["backup_keep"], "backup_interval_hour": row["backup_interval_hour"],
+        "backup_delay_min": row["backup_delay_min"], "backup_due_at": row["backup_due_at"],
         "backup_last": row["backup_last"], "backup_msg": row["backup_msg"],
         "enabled": row["enabled"], "next_run": row["next_run"],
         "last_run": row["last_run"], "last_status": row["last_status"],
@@ -111,6 +112,7 @@ def backup_fields(req, local_dir, label="规则"):
         raise ValueError("备份目录必须是以 / 开头的绝对路径，且不能包含 ..")
     keep = int_field(req, "backup_keep", 7, 1, 999, "备份保留份数")
     hours = int_field(req, "backup_interval_hour", 24, 1, 720, "备份间隔")
+    delay = int_field(req, "backup_delay_min", 5, 0, 1440, "备份延迟")
     if enabled:
         if not backup_dir:
             raise ValueError("启用压缩备份需要填写备份目录")
@@ -118,7 +120,7 @@ def backup_fields(req, local_dir, label="规则"):
             raise ValueError("这条%s两端都不是本机，没有可打包的主机目录" % label)
         if common.paths_overlap(local_dir, backup_dir):
             raise ValueError("备份目录不能和本机同步目录重叠，否则备份包会被再次同步")
-    return enabled, backup_dir, keep, hours
+    return enabled, backup_dir, keep, hours, delay
 
 
 def worker_running():
@@ -410,7 +412,7 @@ def api_save_rule(db, req):
         if site and site["kind"] == "local":
             local_dir = directory
             break
-    backup_enabled, backup_dir, backup_keep, backup_hour = backup_fields(req, local_dir)
+    backup_enabled, backup_dir, backup_keep, backup_hour, backup_delay = backup_fields(req, local_dir)
     next_at = next_run_iso(start_delay)
 
     if rule_id:
@@ -419,20 +421,22 @@ def api_save_rule(db, req):
         db.execute(
             "UPDATE rules SET name=?,site_a=?,dir_a=?,site_b=?,dir_b=?,mode=?,delete_policy=?,"
             "excludes=?,interval_min=?,start_delay_min=?,retry_min=?,backup_enabled=?,backup_dir=?,"
-            "backup_keep=?,backup_interval_hour=?,next_run=? WHERE id=?",
+            "backup_keep=?,backup_interval_hour=?,backup_delay_min=?,backup_due_at='',"
+            "next_run=? WHERE id=?",
             (name, site_a, dir_a, site_b, dir_b, mode, delete_policy, excludes, interval,
              start_delay, retry, backup_enabled, backup_dir, backup_keep, backup_hour,
-             next_at, rule_id),
+             backup_delay, next_at, rule_id),
         )
     else:
         rule_id = str(uuid.uuid4())
         db.execute(
             "INSERT INTO rules(id,name,site_a,dir_a,site_b,dir_b,mode,delete_policy,excludes,"
             "interval_min,start_delay_min,retry_min,backup_enabled,backup_dir,backup_keep,"
-            "backup_interval_hour,enabled,next_run,created) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?)",
+            "backup_interval_hour,backup_delay_min,enabled,next_run,created)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?)",
             (rule_id, name, site_a, dir_a, site_b, dir_b, mode, delete_policy, excludes,
              interval, start_delay, retry, backup_enabled, backup_dir, backup_keep, backup_hour,
-             next_at, common.now_iso()),
+             backup_delay, next_at, common.now_iso()),
         )
     db.commit()
     return {"ok": True, "id": rule_id, "next_run": next_at}
@@ -506,6 +510,7 @@ def group_public(db, row):
         "start_delay_min": row["start_delay_min"], "retry_min": row["retry_min"],
         "backup_enabled": row["backup_enabled"], "backup_dir": row["backup_dir"],
         "backup_keep": row["backup_keep"], "backup_interval_hour": row["backup_interval_hour"],
+        "backup_delay_min": row["backup_delay_min"], "backup_due_at": row["backup_due_at"],
         "backup_last": row["backup_last"], "backup_msg": row["backup_msg"],
         "enabled": row["enabled"],
         "next_run": row["next_run"], "last_run": row["last_run"],
@@ -566,7 +571,7 @@ def api_save_group(db, req):
 
     start_delay = int_field(req, "start_delay_min", 0, 0, 10080, "首次运行延迟")
     retry = int_field(req, "retry_min", 60, 0, 1440, "首轮失败重试间隔")
-    backup_enabled, backup_dir, backup_keep, backup_hour = backup_fields(req, local_dir, "同步组")
+    backup_enabled, backup_dir, backup_keep, backup_hour, backup_delay = backup_fields(req, local_dir, "同步组")
     next_at = next_run_iso(start_delay)
 
     if group_id:
@@ -575,19 +580,19 @@ def api_save_group(db, req):
         db.execute(
             "UPDATE groups SET name=?,delete_policy=?,excludes=?,interval_min=?,start_delay_min=?,"
             "retry_min=?,backup_enabled=?,backup_dir=?,backup_keep=?,backup_interval_hour=?,"
-            "next_run=? WHERE id=?",
+            "backup_delay_min=?,backup_due_at='',next_run=? WHERE id=?",
             (name, delete_policy, excludes, interval, start_delay, retry, backup_enabled,
-             backup_dir, backup_keep, backup_hour, next_at, group_id),
+             backup_dir, backup_keep, backup_hour, backup_delay, next_at, group_id),
         )
         db.execute("DELETE FROM group_members WHERE group_id=?", (group_id,))
     else:
         group_id = str(uuid.uuid4())
         db.execute(
             "INSERT INTO groups(id,name,delete_policy,excludes,interval_min,start_delay_min,retry_min,"
-            "backup_enabled,backup_dir,backup_keep,backup_interval_hour,enabled,next_run,created)"
-            " VALUES(?,?,?,?,?,?,?,?,?,?,?,1,?,?)",
+            "backup_enabled,backup_dir,backup_keep,backup_interval_hour,backup_delay_min,"
+            "enabled,next_run,created) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,1,?,?)",
             (group_id, name, delete_policy, excludes, interval, start_delay, retry, backup_enabled,
-             backup_dir, backup_keep, backup_hour, next_at, common.now_iso()),
+             backup_dir, backup_keep, backup_hour, backup_delay, next_at, common.now_iso()),
         )
     for position, (site_id, directory) in enumerate(cleaned):
         db.execute(

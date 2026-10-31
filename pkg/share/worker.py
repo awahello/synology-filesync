@@ -258,6 +258,12 @@ def main():
                 if STOP:
                     break
                 run_task(db, kind, row)
+
+            # 同步成功后按 backup_delay_min（默认 5 分钟）排的延迟备份，
+            # 到点后在这里真正打包（避开同步刚结束时文件还在落盘）。
+            for table, name, info in engine.run_due_backups(db, log=lambda lv, m: log("  " + m)):
+                log("延迟备份完成「%s」：%s（%s，保留 %d 份）" % (
+                    name, info["name"], common.human_size(info["size"]), info["keep"]))
         except Exception as exc:  # noqa: BLE001
             log("调度循环异常：%s" % exc)
             log(traceback.format_exc().replace("\n", " | ")[:800])
