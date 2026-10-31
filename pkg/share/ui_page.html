@@ -906,11 +906,10 @@ async function groupAction(act, group, btn) {
       notice('已排入同步队列，调度器会在 20 秒内开始。');
       setTimeout(load, 3000);
     } else if (act === 'backup') {
-      btn.disabled = true; btn.textContent = '打包中…';
-      const d = await api('run_backup', { kind: 'group', id: group.id });
-      const b = d.backup || {};
-      notice('备份完成：' + (b.message || b.name || '已生成备份包'), 'good');
-      setTimeout(load, 1500);
+      btn.disabled = true; btn.textContent = '排队中…';
+      await api('run_backup', { kind: 'group', id: group.id });
+      notice('已排入备份队列，调度器会在 20 秒内以 root 权限执行，稍后自动刷新结果。');
+      setTimeout(load, 25000);
     } else if (act === 'dry') {
       btn.disabled = true; btn.textContent = '扫描中…';
       const d = await api('test_group', { id: group.id });
@@ -981,11 +980,10 @@ async function ruleAction(act, rule, btn) {
       notice('已排入同步队列，调度器会在 20 秒内开始。');
       setTimeout(load, 3000);
     } else if (act === 'backup') {
-      btn.disabled = true; btn.textContent = '打包中…';
-      const d = await api('run_backup', { kind: 'rule', id: rule.id });
-      const b = d.backup || {};
-      notice('备份完成：' + (b.message || b.name || '已生成备份包'), 'good');
-      setTimeout(load, 1500);
+      btn.disabled = true; btn.textContent = '排队中…';
+      await api('run_backup', { kind: 'rule', id: rule.id });
+      notice('已排入备份队列，调度器会在 20 秒内以 root 权限执行，稍后自动刷新结果。');
+      setTimeout(load, 25000);
     } else if (act === 'dry') {
       btn.disabled = true; btn.textContent = '扫描中…';
       const d = await api('test_rule', { id: rule.id });
@@ -1300,7 +1298,7 @@ function previewApi(action, data) {
   const now = new Date();
   const iso = m => new Date(now.getTime() - m * 60000).toISOString();
   const db = {
-    version: '0.3.16-0001',
+    version: '0.3.17-0001',
     settings: { trash_days: '30', conflict_copy: '1', worker_paused: '0' },
     sites: [
       { id: 'local', name: '本机 · DiskStation', kind: 'local', host: '', port: 22, ssh_user: '', key_id: '', note: '', last_check: iso(3), last_ok: 1, last_check_msg: '本机路径可直接访问', caps_json: '{}' },
@@ -1336,9 +1334,7 @@ function previewApi(action, data) {
     ]
   };
   if (action === 'bootstrap') return Promise.resolve(db);
-  if (action === 'run_backup') return Promise.resolve({ ok: true, backup: {
-    name: 'photo-20261031-191500.tar.gz', size: 1932735283, keep: 7, removed: 0,
-    message: '成功：photo-20261031-191500.tar.gz（1.8 GB，保留 7 份）' } });
+  if (action === 'run_backup') return Promise.resolve({ ok: true, scheduled: true });
   if (action === 'logs') return Promise.resolve({ ok: true, runs: [
     { started: iso(4), status: 'ok', message: 'A→B 3，B→A 1，删除 0，冲突 0' },
     { started: iso(14), status: 'ok', message: 'A→B 0，B→A 0，删除 2，冲突 0' },

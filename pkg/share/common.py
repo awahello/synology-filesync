@@ -39,7 +39,7 @@ CSRF_PATH = PKG_VAR / "csrf.key"
 PID_PATH = PKG_VAR / "worker.pid"
 LOG_PATH = PKG_VAR / "worker.log"
 
-APP_VERSION = "0.3.16-0001"
+APP_VERSION = "0.3.17-0001"
 AUTH_CGI = "/usr/syno/synoman/webman/modules/authenticate.cgi"
 AUTH_DIAGNOSTIC = "DSM 会话验证未完成。"
 MAX_BODY = 262144
@@ -107,6 +107,7 @@ CREATE TABLE IF NOT EXISTS rules (
     backup_interval_hour INTEGER NOT NULL DEFAULT 24,
     backup_delay_min INTEGER NOT NULL DEFAULT 5,
     backup_due_at TEXT NOT NULL DEFAULT '',
+    backup_force  INTEGER NOT NULL DEFAULT 0,
     backup_last   TEXT NOT NULL DEFAULT '',
     backup_msg    TEXT NOT NULL DEFAULT '',
     enabled       INTEGER NOT NULL DEFAULT 1,
@@ -160,6 +161,7 @@ CREATE TABLE IF NOT EXISTS groups (
     backup_interval_hour INTEGER NOT NULL DEFAULT 24,
     backup_delay_min INTEGER NOT NULL DEFAULT 5,
     backup_due_at TEXT NOT NULL DEFAULT '',
+    backup_force  INTEGER NOT NULL DEFAULT 0,
     backup_last   TEXT NOT NULL DEFAULT '',
     backup_msg    TEXT NOT NULL DEFAULT '',
     enabled       INTEGER NOT NULL DEFAULT 1,
@@ -211,6 +213,7 @@ MIGRATIONS = {
         "backup_interval_hour": "INTEGER NOT NULL DEFAULT 24",
         "backup_delay_min": "INTEGER NOT NULL DEFAULT 5",
         "backup_due_at": "TEXT NOT NULL DEFAULT ''",
+        "backup_force": "INTEGER NOT NULL DEFAULT 0",
         "backup_last": "TEXT NOT NULL DEFAULT ''",
         "backup_msg": "TEXT NOT NULL DEFAULT ''",
     },
@@ -223,6 +226,7 @@ MIGRATIONS = {
         "backup_interval_hour": "INTEGER NOT NULL DEFAULT 24",
         "backup_delay_min": "INTEGER NOT NULL DEFAULT 5",
         "backup_due_at": "TEXT NOT NULL DEFAULT ''",
+        "backup_force": "INTEGER NOT NULL DEFAULT 0",
         "backup_last": "TEXT NOT NULL DEFAULT ''",
         "backup_msg": "TEXT NOT NULL DEFAULT ''",
     },

@@ -173,7 +173,7 @@ def schedule_backup(db, table, owner_id):
     if delay < 0:
         delay = 0
     due = (common.now_local() + dt.timedelta(minutes=delay)).isoformat(timespec="seconds")
-    db.execute("UPDATE %s SET backup_due_at=? WHERE id=?" % table, (due, owner_id))
+    db.execute("UPDATE %s SET backup_due_at=?,backup_force=0 WHERE id=?" % table, (due, owner_id))
     db.commit()
     return True, delay
 
@@ -188,7 +188,7 @@ def run_due_backups(db, log=None):
     results = []
     for table in ("rules", "groups"):
         rows = db.execute(
-            "SELECT id, name, backup_due_at FROM %s WHERE backup_due_at<>''" % table
+            "SELECT id, name, backup_due_at, backup_force FROM %s WHERE backup_due_at<>''" % table
         ).fetchall()
         for row in rows:
             due = common.parse_iso(row["backup_due_at"])
@@ -196,11 +196,12 @@ def run_due_backups(db, log=None):
                 continue  # 还没到点
             info = None
             try:
-                info = run_backup(db, table, row["id"], log=log)
+                # backup_force=1 是界面上的「立即备份」，绕过间隔；否则按间隔节流
+                info = run_backup(db, table, row["id"], force=bool(row["backup_force"]), log=log)
             except RuleError as exc:
                 if log:
                     log("warn", "延迟备份未完成：%s" % str(exc)[:200])
-            db.execute("UPDATE %s SET backup_due_at='' WHERE id=?" % table, (row["id"],))
+            db.execute("UPDATE %s SET backup_due_at='',backup_force=0 WHERE id=?" % table, (row["id"],))
             db.commit()
             if info:
                 results.append((table, row["name"], info))

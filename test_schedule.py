@@ -273,7 +273,12 @@ db.commit()
 head, body = run(["cgi_app.py"], method="POST", body={"action": "run_backup", "kind": "rule", "id": backup_task},
                  extra_env={"HTTP_X_CSRF_TOKEN": csrf_token})
 data = json.loads(body)
-check("接口手动备份成功", data.get("ok") is True and data["backup"]["name"].endswith(".tar.gz"), data)
+check("手动备份改为排期给 worker（CGI 不直接打包）",
+      data.get("ok") is True and data.get("scheduled") is True, data)
+done = engine.run_due_backups(db)
+row = db.execute("SELECT backup_due_at,backup_force FROM rules WHERE id=?", (backup_task,)).fetchone()
+check("worker 立即执行了强制备份", len(done) >= 1 and row["backup_due_at"] == "" and row["backup_force"] == 0,
+      {"done": len(done), "row": dict(row)})
 
 head, body = run(["cgi_app.py"], method="POST", body={"action": "list_backups", "kind": "rule", "id": backup_task},
                  extra_env={"HTTP_X_CSRF_TOKEN": csrf_token})
@@ -384,4 +389,4 @@ finally:
     archive.TAR_BIN = old_bin
 
 db.close()
-print("\n0.3.16 新功能全部测试通过")
+print("\n0.3.17 新功能全部测试通过")

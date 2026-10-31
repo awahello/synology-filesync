@@ -421,7 +421,7 @@ def api_save_rule(db, req):
         db.execute(
             "UPDATE rules SET name=?,site_a=?,dir_a=?,site_b=?,dir_b=?,mode=?,delete_policy=?,"
             "excludes=?,interval_min=?,start_delay_min=?,retry_min=?,backup_enabled=?,backup_dir=?,"
-            "backup_keep=?,backup_interval_hour=?,backup_delay_min=?,backup_due_at='',"
+            "backup_keep=?,backup_interval_hour=?,backup_delay_min=?,backup_due_at='',backup_force=0,"
             "next_run=? WHERE id=?",
             (name, site_a, dir_a, site_b, dir_b, mode, delete_policy, excludes, interval,
              start_delay, retry, backup_enabled, backup_dir, backup_keep, backup_hour,
@@ -580,7 +580,7 @@ def api_save_group(db, req):
         db.execute(
             "UPDATE groups SET name=?,delete_policy=?,excludes=?,interval_min=?,start_delay_min=?,"
             "retry_min=?,backup_enabled=?,backup_dir=?,backup_keep=?,backup_interval_hour=?,"
-            "backup_delay_min=?,backup_due_at='',next_run=? WHERE id=?",
+            "backup_delay_min=?,backup_due_at='',backup_force=0,next_run=? WHERE id=?",
             (name, delete_policy, excludes, interval, start_delay, retry, backup_enabled,
              backup_dir, backup_keep, backup_hour, backup_delay, next_at, group_id),
         )
@@ -673,14 +673,22 @@ def _backup_target(db, req):
 
 
 def api_run_backup(db, req):
-    """手动立刻打包一次，不受备份间隔限制。"""
+    """手动立刻打包一次，不受备份间隔限制。
+
+    注意：不能在 CGI 里直接打包——api.cgi 以套件账号运行，写不了
+    /volume1/homes 这类只有 root 能写的目录（tar 会报 Permission denied）。
+    所以这里只排一个「立刻 + 强制」的备份，由以 root 运行的调度进程在
+    20 秒内真正执行；结果写回 backup_msg，界面刷新即可看到。
+    """
     table, owner_id, row = _backup_target(db, req)
     if not row["backup_enabled"]:
         raise ValueError("这个任务还没有启用压缩备份")
     if not row["backup_dir"]:
         raise ValueError("这个任务还没有设置备份目录")
-    info = engine.run_backup(db, table, owner_id, force=True)
-    return {"ok": True, "backup": info}
+    db.execute("UPDATE %s SET backup_due_at=?,backup_force=1 WHERE id=?" % table,
+               (common.now_iso(), owner_id))
+    db.commit()
+    return {"ok": True, "scheduled": True}
 
 
 def api_list_backups(db, req):
