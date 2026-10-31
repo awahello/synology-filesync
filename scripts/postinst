@@ -1,20 +1,62 @@
 #!/bin/sh
 # Copyright (c) 2026 AWA <https://www.akkdiy.cn>. All rights reserved.
-# 安装后：把套件服务账号加入 administrators 组，使其能读取 DSM 共享文件夹。
-# 文件同步必须能遍历用户数据，这是本套件能工作的前提。
+# 安装后：把套件服务账号加入 administrators 组，并授予「以 root 运行调度进程」的最小权限。
+# 文件同步必须能遍历用户数据（含 /volume1/homes），这是本套件能工作的前提。
 set -u
 
 PKG_USER="filesync"
+PKG_BASE="/var/packages/FileSync"
+ROOTLAUNCH="${PKG_BASE}/target/share/run_worker.sh"
+STOPLAUNCH="${PKG_BASE}/target/share/stop_worker.sh"
+SUDO_FILE="/etc/sudoers.d/FileSync-worker"
+SUDO_RULE="${PKG_USER} ALL=(root) NOPASSWD: ${ROOTLAUNCH}, ${STOPLAUNCH}"
+MARK_BEGIN="# >>> FileSync worker >>>"
+MARK_END="# <<< FileSync worker <<<"
 
 if id "$PKG_USER" >/dev/null 2>&1; then
     synogroup --memberadd administrators "$PKG_USER" >/dev/null 2>&1 || true
 fi
 
 # 预建运行目录，保证权限正确
-mkdir -p "/var/packages/FileSync/var"
-chmod 0700 "/var/packages/FileSync/var"
+mkdir -p "${PKG_BASE}/var"
+chmod 0700 "${PKG_BASE}/var"
 if id "$PKG_USER" >/dev/null 2>&1; then
-    chown "$PKG_USER:$PKG_USER" "/var/packages/FileSync/var" 2>/dev/null || true
+    chown "$PKG_USER:$PKG_USER" "${PKG_BASE}/var" 2>/dev/null || true
+fi
+
+# --------------------------------------------------------------------------
+# 免密 sudo：只允许套件账号执行 run_worker.sh，且脚本不接受任何参数。
+# 调度进程需要 root 才能读 /volume1/homes、其他用户的共享文件夹等目录。
+# --------------------------------------------------------------------------
+if [ -x "$ROOTLAUNCH" ]; then
+    mkdir -p /etc/sudoers.d
+    chmod 0755 /etc/sudoers.d 2>/dev/null || true
+    printf '%s\n' "$SUDO_RULE" > "$SUDO_FILE" 2>/dev/null || true
+    chown root:root "$SUDO_FILE" 2>/dev/null || true
+    chmod 0440 "$SUDO_FILE" 2>/dev/null || true
+
+    # 规则写坏了会让 sudo 整体失效，先单独校验一次
+    if command -v visudo >/dev/null 2>&1; then
+        visudo -cf "$SUDO_FILE" >/dev/null 2>&1 || rm -f "$SUDO_FILE"
+    fi
+
+    # sudoers.d 不一定被 include，确认规则真的生效；不生效就直接写进主文件
+    if ! sudo -n -l -U "$PKG_USER" 2>/dev/null | grep -Fq "run_worker.sh"; then
+        if [ -f /etc/sudoers ] && ! grep -Fq "$MARK_BEGIN" /etc/sudoers; then
+            cp -a /etc/sudoers /etc/sudoers.filesync.bak 2>/dev/null || true
+            {
+                printf '\n%s\n' "$MARK_BEGIN"
+                printf '%s\n' "$SUDO_RULE"
+                printf '%s\n' "$MARK_END"
+            } >> /etc/sudoers 2>/dev/null || true
+            if command -v visudo >/dev/null 2>&1; then
+                if ! visudo -c >/dev/null 2>&1; then
+                    # 校验不过就还原：宁可没有 root，也不能把 sudo 弄坏
+                    [ -f /etc/sudoers.filesync.bak ] && cp -a /etc/sudoers.filesync.bak /etc/sudoers
+                fi
+            fi
+        fi
+    fi
 fi
 
 exit 0

@@ -39,7 +39,7 @@ CSRF_PATH = PKG_VAR / "csrf.key"
 PID_PATH = PKG_VAR / "worker.pid"
 LOG_PATH = PKG_VAR / "worker.log"
 
-APP_VERSION = "0.3.10-0001"
+APP_VERSION = "0.3.11-0001"
 AUTH_CGI = "/usr/syno/synoman/webman/modules/authenticate.cgi"
 AUTH_DIAGNOSTIC = "DSM 会话验证未完成。"
 MAX_BODY = 262144
@@ -240,9 +240,26 @@ def connect_db():
     db.execute("PRAGMA busy_timeout=30000")
     db.executescript(SCHEMA)
     ensure_columns(db)
+    relax_db_permissions()
     seed_local_site(db)
     seed_settings(db)
     return db
+
+
+def relax_db_permissions():
+    """调度进程是 root、网页端是套件账号，两边都要写同一个库。
+
+    不放开的话，谁先建库谁就是属主，另一个进程直接写不进去（readonly database）。
+    目录本身是 0700，只有套件账号和 root 能进，所以库文件放开到 0666 不会多出暴露面。
+    """
+    for suffix in ("", "-wal", "-shm"):
+        path = Path(str(DB_PATH) + suffix)
+        if not path.exists():
+            continue
+        try:
+            os.chmod(path, 0o666)
+        except OSError:
+            pass
 
 
 def ensure_columns(db):

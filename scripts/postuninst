@@ -1,0 +1,21 @@
+#!/bin/sh
+# Copyright (c) 2026 AWA <https://www.akkdiy.cn>. All rights reserved.
+# 卸载后：撤掉安装时给套件账号开的免密 sudo 规则，别留下提权后门。
+set -u
+
+SUDO_FILE="/etc/sudoers.d/FileSync-worker"
+
+rm -f "$SUDO_FILE" 2>/dev/null || true
+
+if [ -f /etc/sudoers ] && grep -Fq "# >>> FileSync worker >>>" /etc/sudoers 2>/dev/null; then
+    cp -a /etc/sudoers /etc/sudoers.filesync.bak 2>/dev/null || true
+    sed -i '/# >>> FileSync worker >>>/,/# <<< FileSync worker <<</d' /etc/sudoers 2>/dev/null || true
+    if command -v visudo >/dev/null 2>&1; then
+        if ! visudo -c >/dev/null 2>&1; then
+            [ -f /etc/sudoers.filesync.bak ] && cp -a /etc/sudoers.filesync.bak /etc/sudoers
+        fi
+    fi
+    rm -f /etc/sudoers.filesync.bak 2>/dev/null || true
+fi
+
+exit 0

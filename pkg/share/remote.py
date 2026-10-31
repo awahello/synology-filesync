@@ -585,7 +585,7 @@ def list_dirs_local(directory):
         try:
             names = localroot.list_dirs_via_worker(directory)
         except localroot.LocalRootError as exc:
-            raise RemoteError("没有权限访问：%s（%s）" % (directory, exc))
+            raise RemoteError("没有权限访问：%s；%s" % (directory, exc))
     except OSError as exc:
         raise RemoteError("无法读取目录：%s" % exc)
     return _sort_names(names)

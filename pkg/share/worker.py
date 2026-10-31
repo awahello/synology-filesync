@@ -97,7 +97,8 @@ def acquire_singleton():
 def write_pid():
     common.PID_PATH.write_text(str(os.getpid()), encoding="utf-8")
     try:
-        os.chmod(common.PID_PATH, 0o600)
+        # 0644：worker 是 root，停止脚本要以套件账号读这个 PID
+        os.chmod(common.PID_PATH, 0o644)
     except OSError:
         pass
 

@@ -11,6 +11,8 @@ VAR="${BASE}/var"
 PIDFILE="${VAR}/worker.pid"
 LOGFILE="${VAR}/worker.log"
 APP="${BASE}/target/share/worker.py"
+ROOTLAUNCH="${BASE}/target/share/run_worker.sh"
+STOPLAUNCH="${BASE}/target/share/stop_worker.sh"
 
 PYTHON=""
 for candidate in \
@@ -36,9 +38,21 @@ running() {
     [ -f "$PIDFILE" ] || return 1
     pid="$(cat "$PIDFILE" 2>/dev/null || true)"
     case "$pid" in ''|*[!0-9]*) return 1 ;; esac
-    kill -0 "$pid" 2>/dev/null || return 1
+    # 不用 kill -0：worker 是 root，套件账号探测会被 EPERM 拒绝，
+    # 看起来就像"没在跑"。直接看 /proc 里有没有这个进程更可靠。
     [ -r "/proc/$pid/cmdline" ] || return 1
     tr '\000' ' ' < "/proc/$pid/cmdline" | grep -F "${APP}" >/dev/null 2>&1
+}
+
+wait_running() {
+    # 最多等 $1 秒，看 worker 有没有把 PID 写出来并活着
+    n=0
+    while [ "$n" -lt "$1" ]; do
+        running && return 0
+        sleep 1
+        n=$((n + 1))
+    done
+    return 1
 }
 
 start_worker() {
@@ -49,13 +63,22 @@ start_worker() {
     chmod 0700 "$VAR"
     touch "$LOGFILE"
     chmod 0600 "$LOGFILE"
-    "$PYTHON" "$APP" >> "$LOGFILE" 2>&1 &
-    tries=0
-    while [ "$tries" -lt 30 ]; do
-        running && return 0
-        sleep 1
-        tries=$((tries + 1))
-    done
+
+    if [ "$(id -u)" -eq 0 ]; then
+        "$PYTHON" "$APP" >> "$LOGFILE" 2>&1 &
+        wait_running 30 && return 0
+    else
+        # 同步 /volume1/homes 这类目录需要 root：postinst 已给套件账号写好
+        # 只允许执行 run_worker.sh 的免密 sudo 规则，这里借它提权。
+        if [ -x "$ROOTLAUNCH" ]; then
+            sudo -n "$ROOTLAUNCH" >> "$LOGFILE" 2>&1 &
+            wait_running 8 && return 0
+            echo "[warn] 以 root 启动失败（sudo 规则缺失？），改用套件账号启动；/volume1/homes 等目录将无权限" >> "$LOGFILE"
+        fi
+        "$PYTHON" "$APP" >> "$LOGFILE" 2>&1 &
+        wait_running 22 && return 0
+    fi
+
     echo "Worker did not start; inspect $LOGFILE" >&2
     return 1
 }
@@ -66,15 +89,25 @@ case "${1:-}" in
         start_worker
         ;;
     stop)
-        if running; then
-            pid="$(cat "$PIDFILE")"
-            kill "$pid" 2>/dev/null || true
-            tries=0
-            while kill -0 "$pid" 2>/dev/null && [ "$tries" -lt 20 ]; do
-                sleep 1
-                tries=$((tries + 1))
-            done
-            kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null || true
+        if [ -f "$PIDFILE" ]; then
+            # worker 是 root 时套件账号 kill 不动，交给 stop_worker.sh 代劳
+            if [ "$(id -u)" -ne 0 ] && [ -x "$STOPLAUNCH" ] && sudo -n "$STOPLAUNCH" 2>/dev/null; then
+                :
+            else
+                pid="$(cat "$PIDFILE" 2>/dev/null || true)"
+                case "$pid" in
+                    ''|*[!0-9]*) ;;
+                    *)
+                        kill "$pid" 2>/dev/null || true
+                        tries=0
+                        while [ -r "/proc/$pid" ] && [ "$tries" -lt 20 ]; do
+                            sleep 1
+                            tries=$((tries + 1))
+                        done
+                        [ -r "/proc/$pid" ] && kill -9 "$pid" 2>/dev/null || true
+                        ;;
+                esac
+            fi
         fi
         rm -f "$PIDFILE"
         ;;

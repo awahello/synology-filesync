@@ -82,23 +82,32 @@ def start_server():
         return None
 
 
+def current_uid():
+    try:
+        return os.geteuid()
+    except AttributeError:  # pragma: no cover - 仅 Windows 调试
+        return -1
+
+
 def respond(request):
     """把一条请求变成响应字典。单独拆出来便于测试。"""
+    uid = current_uid()
     path = request.get("path") if isinstance(request, dict) else None
     # 只接受绝对路径：相对路径在不同进程的工作目录下含义不同，没有意义
     if (not isinstance(path, str) or not path or len(path) > 1024
             or any(ord(c) < 32 for c in path) or not os.path.isabs(path)):
-        return {"ok": False, "error": "路径不正确"}
+        return {"ok": False, "error": "路径不正确", "uid": uid}
+    # 错误信息里不带路径：调用方会把路径和原因拼成一句完整的话
     try:
-        return {"ok": True, "dirs": list_subdirs(path)}
+        return {"ok": True, "dirs": list_subdirs(path), "uid": uid}
     except FileNotFoundError:
-        return {"ok": False, "error": "目录不存在：" + path}
+        return {"ok": False, "error": "目录不存在", "uid": uid}
     except NotADirectoryError:
-        return {"ok": False, "error": "这不是一个目录：" + path}
+        return {"ok": False, "error": "这不是一个目录", "uid": uid}
     except PermissionError:
-        return {"ok": False, "error": "没有权限访问：" + path}
+        return {"ok": False, "error": "权限不足", "uid": uid}
     except OSError as exc:
-        return {"ok": False, "error": "无法读取目录：%s" % exc}
+        return {"ok": False, "error": "无法读取目录：%s" % exc, "uid": uid}
 
 
 def handle_one(server):
@@ -183,7 +192,14 @@ def list_dirs_via_worker(path, timeout=CLIENT_TIMEOUT):
     except ValueError:
         raise LocalRootError("调度进程返回内容不正确")
     if not payload.get("ok"):
-        raise LocalRootError(payload.get("error") or "代读目录失败")
+        reason = payload.get("error") or "代读目录失败"
+        uid = payload.get("uid")
+        if reason == "权限不足":
+            if isinstance(uid, int) and uid != 0:
+                reason = "调度进程以 uid %d 运行，无权读取（需要 root，请重装套件以写入 sudo 规则）" % uid
+            else:
+                reason = "连 root 都读不到，可能是加密共享文件夹未解锁"
+        raise LocalRootError(reason)
     dirs = payload.get("dirs")
     if not isinstance(dirs, list):
         raise LocalRootError("调度进程返回内容不正确")

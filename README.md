@@ -4,7 +4,7 @@
 
 **只传有变化的文件；三站时间强制一致；三站都没更新时只扫描、不传输。**
 
-**版本 0.3.10** · 平台 DSM 7.x · 架构 x86_64 · 作者 [AWA](https://www.akkdiy.cn)
+**版本 0.3.11** · 平台 DSM 7.x · 架构 x86_64 · 作者 [AWA](https://www.akkdiy.cn)
 
 ![界面截图](docs/screenshots/main.png)
 
@@ -49,6 +49,7 @@ FileSync 的做法是：**套件只装在 B（群晖）上，B 作为中转站**
 | 远端 | Linux 或 OpenWrt，能 SSH 登录（建议 root） |
 | 远端依赖 | `find`、`stat`、`tar` 必装；`rsync` 可选（有则更快） |
 | 网络 | 群晖能 SSH 到远端对应端口 |
+| 本机权限 | 调度进程以 root 运行（安装时自动写入 `/etc/sudoers.d/FileSync-worker`，只允许套件账号执行 `run_worker.sh`），这样才能读写 `/volume1/homes` 这类只有 root 能进的目录 |
 
 ## 安装教程
 
@@ -195,8 +196,20 @@ FileSync 的做法是：**套件只装在 B（群晖）上，B 作为中转站**
 公钥没装好。到「密钥管理」重新复制安装命令，到远端执行；或用 `cat >> ~/.ssh/authorized_keys` 单独粘贴公钥，注意不要被终端折行截断。
 
 **Q：选目录时提示「没有权限访问：/volume1/homes」？**
-`/volume1/homes` 这类目录是 `root:root 711`——能进去、但不允许列内容，而网页端是以套件账号 `filesync` 运行的。0.3.10 起，网页端读不到时会转交以 root 运行的调度进程代读，正常情况下能正常浏览。
-如果仍然报错，先看「套件中心 → 多站文件同步 → 查看日志」里有没有「目录代读服务已就绪」：没有就说明调度进程没起来（重新启动套件）。实在打不开时，也可以直接在地址栏输入完整路径，再点「选择此目录」——**列不出内容不影响使用该路径**，真正同步是由调度进程（root）执行的。
+`/volume1/homes` 这类目录是 `root:root 711`——能进去、但不允许列内容，而网页端是以套件账号 `filesync` 运行的。
+0.3.11 起调度进程以 root 运行：安装时 `postinst` 会写入 `/etc/sudoers.d/FileSync-worker`，只允许套件账号执行 `run_worker.sh`（不接受参数），同步、列目录、压缩备份都用 root 权限。
+
+如果仍然报错，看错误信息里的「调度进程以 uid N 运行」：出现这句说明 sudo 规则没生效。登录 SSH，用管理员执行一次：
+
+```sh
+sudo tee /etc/sudoers.d/FileSync-worker >/dev/null <<'EOF'
+filesync ALL=(root) NOPASSWD: /var/packages/FileSync/target/share/run_worker.sh, /var/packages/FileSync/target/share/stop_worker.sh
+EOF
+sudo chmod 440 /etc/sudoers.d/FileSync-worker
+sudo synopkg restart FileSync
+```
+
+然后看「套件中心 → 多站文件同步 → 查看日志」，应出现 `目录代读服务已就绪（uid=0）`。若日志里是 `[warn] 以 root 启动失败`，说明规则仍未生效，按上面的命令再执行一次即可。
 
 **Q：OpenWrt 上「测试连接」失败？**
 检查 `/etc/config/dropbear` 是否允许 root 登录（`option RootLogin '1'`），以及 `/etc/dropbear/authorized_keys` 权限是否为 `600`。

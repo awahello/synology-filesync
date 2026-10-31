@@ -18,7 +18,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 PKG = ROOT / "pkg"
-VERSION = "0.3.10-0001"
+VERSION = "0.3.11-0001"
 OUT = ROOT.parent / ("多站文件同步-" + VERSION.split("-")[0] + ".spk")
 
 # package.tgz 内的条目（顺序即打包顺序）
@@ -29,6 +29,8 @@ PAYLOAD = [
     ("share/engine.py", "f"),
     ("share/archive.py", "f"),
     ("share/localroot.py", "f"),
+    ("share/run_worker.sh", "f"),
+    ("share/stop_worker.sh", "f"),
     ("share/cgi_app.py", "f"),
     ("share/worker.py", "f"),
     ("share/ui_page.html", "f"),
@@ -48,7 +50,7 @@ PAYLOAD = [
     ("var", "dir"),
 ]
 
-EXECUTABLES = {"ui/api.cgi", "ui/index.cgi"}
+EXECUTABLES = {"ui/api.cgi", "ui/index.cgi", "share/run_worker.sh", "share/stop_worker.sh"}
 
 
 def add_entry(tf, name, src, mode, isdir=False):
@@ -122,6 +124,7 @@ def build_spk():
         ("scripts", "d", 0o755),
         ("scripts/postinst", "f", 0o755),
         ("scripts/start-stop-status", "f", 0o755),
+        ("scripts/postuninst", "f", 0o755),
     ]
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w", format=tarfile.USTAR_FORMAT) as tf:
