@@ -334,5 +334,54 @@ check("没开备份时不排期", scheduled2 is False)
 db.execute("DELETE FROM rules WHERE id=?", (delay_task,))
 db.commit()
 
+# ---------------------------------------------------------------- tar 退出码
+print("\n=== tar 退出码：1 视为成功，2 才算失败 ===")
+
+
+class _PosixOS:
+    name = "posix"
+
+    def __init__(self, real):
+        self._real = real
+
+    def __getattr__(self, key):
+        return getattr(self._real, key)
+
+
+class _Proc:
+    def __init__(self, code):
+        self.returncode = code
+        self.stderr = b""
+        self.stdout = b""
+
+
+real_os = archive.os
+fake_bin = Path(tempfile.mkdtemp()) / "tar"
+fake_bin.write_text("x", encoding="utf-8")
+old_bin = archive.TAR_BIN
+real_run = archive.subprocess.run
+archive.os = _PosixOS(real_os)
+archive.TAR_BIN = str(fake_bin)
+try:
+    archive.subprocess.run = lambda *a, **k: _Proc(1)
+    ok1 = True
+    try:
+        archive._run_tar("/tmp", "web", "/tmp/x.tar.gz", [])
+    except archive.ArchiveError:
+        ok1 = False
+    check("退出码 1（文件打包中被改动）不报错", ok1)
+
+    archive.subprocess.run = lambda *a, **k: _Proc(2)
+    raised = ""
+    try:
+        archive._run_tar("/tmp", "web", "/tmp/x.tar.gz", [])
+    except archive.ArchiveError as exc:
+        raised = str(exc)
+    check("退出码 2 才报错", "打包失败" in raised, raised)
+finally:
+    archive.subprocess.run = real_run
+    archive.os = real_os
+    archive.TAR_BIN = old_bin
+
 db.close()
-print("\n0.3.15 新功能全部测试通过")
+print("\n0.3.16 新功能全部测试通过")

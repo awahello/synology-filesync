@@ -101,9 +101,12 @@ def _run_tar(parent, base, output, patterns, timeout=ARCHIVE_TIMEOUT):
             raise ArchiveError("打包超时（超过 %d 小时）" % (timeout // 3600))
         except OSError as exc:
             raise ArchiveError("无法执行 tar：%s" % exc)
-        if proc.returncode != 0:
-            detail = proc.stderr.decode("utf-8", "replace").strip().splitlines()
-            raise ArchiveError("打包失败：" + ((detail[-1] if detail else "tar 代码 " + str(proc.returncode))[:300]))
+        # tar 退出码：0=成功；1=有文件在打包过程中被改动/消失（网站目录、日志、
+        # 会话文件极常见），此时包仍然完整可用，不能当成失败；>=2 才是真错误。
+        if proc.returncode not in (0, 1):
+            lines = proc.stderr.decode("utf-8", "replace").strip().splitlines()
+            detail = " | ".join(lines[-3:]) if lines else "tar 代码 " + str(proc.returncode)
+            raise ArchiveError("打包失败：" + detail[:400])
         return
 
     # 没有 tar 的环境（本地调试）用 Python 实现兜底，行为与 tar 一致
@@ -153,6 +156,10 @@ def create_archive(source, target_dir, keep=7, excludes=()):
 
     try:
         os.makedirs(target_dir, exist_ok=True)
+    except PermissionError:
+        raise ArchiveError(
+            "没有权限创建备份目录 %s（备份到 /volume1/homes 这类目录需要调度进程以 root 运行；"
+            "请重装或重启套件让 run-as:root 生效）" % target_dir)
     except OSError as exc:
         raise ArchiveError("无法创建备份目录 %s：%s" % (target_dir, exc))
 
