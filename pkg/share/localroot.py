@@ -62,7 +62,11 @@ def list_subdirs(path):
 # 服务端（跑在调度进程里）
 # --------------------------------------------------------------------------
 def start_server():
-    """建立监听 socket；失败返回 None（例如平台不支持 AF_UNIX）。"""
+    """建立监听 socket；失败返回 None（例如平台不支持 AF_UNIX）。
+
+    这里故意保持阻塞模式：目录代读由后台线程 serve_socket 独占服务，阻塞
+    accept 在空闲时让线程挂起（不空转、不占 CPU），来连接时再唤醒。
+    """
     family = af_unix()
     if family is None:
         return None
@@ -76,7 +80,6 @@ def start_server():
         # 目录本身是 0700，socket 再放开读写，只有套件账号和 root 连得进来
         os.chmod(path, 0o666)
         server.listen(8)
-        server.setblocking(False)
         return server
     except OSError:
         return None

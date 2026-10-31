@@ -104,4 +104,74 @@ finally:
     remote.os = real_os
 check("扫描无权限目录直接报错", "没有权限读取" in scan_error, scan_error)
 
+print("\n=== 后台线程服务：主线程忙时浏览仍能秒回 ===")
+import socket as pysock
+import threading
+import time
+
+# Windows 的 Python 没有 AF_UNIX，这里用 TCP 回环模拟同一条协议，
+# 只为验证「服务在独立线程上，主线程忙也不会卡住浏览」。
+ADDR = ["127.0.0.1", 0]
+
+
+def _fake_af_unix():
+    return pysock.AF_INET
+
+
+def _fake_socket_path():
+    return (ADDR[0], ADDR[1])
+
+
+def _fake_start_server():
+    srv = pysock.socket(pysock.AF_INET, pysock.SOCK_STREAM)
+    srv.setsockopt(pysock.SOL_SOCKET, pysock.SO_REUSEADDR, 1)
+    srv.bind((ADDR[0], 0))
+    ADDR[1] = srv.getsockname()[1]
+    srv.listen(8)
+    return srv  # 阻塞模式，与生产一致（空闲时不空转）
+
+
+def _fake_stop_server(srv):
+    try:
+        srv.close()
+    except OSError:
+        pass
+
+
+saved = (localroot.af_unix, localroot.socket_path, localroot.start_server, localroot.stop_server)
+localroot.af_unix = _fake_af_unix
+localroot.socket_path = _fake_socket_path
+localroot.start_server = _fake_start_server
+localroot.stop_server = _fake_stop_server
+server = None
+stop_flag = {"v": False}
+try:
+    server = localroot.start_server()
+
+    def _serve():
+        while not stop_flag["v"]:
+            try:
+                localroot.handle_one(server)  # 与 worker.serve_socket 相同
+            except Exception:
+                continue
+
+    threading.Thread(target=_serve, daemon=True).start()
+
+    def _busy():
+        time.sleep(1.5)  # 模拟主线程正在同步
+
+    busy = threading.Thread(target=_busy)
+    busy.start()
+    t0 = time.time()
+    dirs = localroot.list_dirs_via_worker(str(root), timeout=5)
+    elapsed = time.time() - t0
+    busy.join()
+    check("同步进行中仍能列目录", "homes" in dirs, dirs)
+    check("响应没被 1.5 秒忙等拖住", elapsed < 1.2, "%.2fs" % elapsed)
+finally:
+    stop_flag["v"] = True
+    if server is not None:
+        localroot.stop_server(server)
+    localroot.af_unix, localroot.socket_path, localroot.start_server, localroot.stop_server = saved
+
 print("\n目录代读测试全部通过")

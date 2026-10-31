@@ -4,7 +4,7 @@
 
 **只传有变化的文件；三站时间强制一致；三站都没更新时只扫描、不传输。**
 
-**版本 0.3.12** · 平台 DSM 7.x · 架构 x86_64 · 作者 [AWA](https://www.akkdiy.cn)
+**版本 0.3.13** · 平台 DSM 7.x · 架构 x86_64 · 作者 [AWA](https://www.akkdiy.cn)
 
 ![界面截图](docs/screenshots/main.png)
 
@@ -206,6 +206,9 @@ synopkg restart FileSync
 ```
 
 如果仍然报错，看错误信息里是否出现「调度进程未以 root 运行（当前 uid N）」：出现这句说明 `run-as` 没改成 root。按上面的命令再执行一次，并确认 `/var/packages/FileSync/conf/privilege` 里 `run-as` 已经是 `root`。改成功后，到「套件中心 → 多站文件同步 → 查看日志」，应出现 `目录代读服务已就绪（uid=0）`。
+
+**Q：浏览目录时提示「调度进程忙（可能正在同步），请稍后再试」？**
+0.3.13 起，目录代读由调度进程里的**独立后台线程**常驻服务，主线程在跑同步时也不会卡住浏览。若仍偶尔出现，说明这一版之前的老进程还在（升级后需重启套件），重启一次即可；同步本身不受影响。
 
 **Q：OpenWrt 上「测试连接」失败？**
 检查 `/etc/config/dropbear` 是否允许 root 登录（`option RootLogin '1'`），以及 `/etc/dropbear/authorized_keys` 权限是否为 `600`。

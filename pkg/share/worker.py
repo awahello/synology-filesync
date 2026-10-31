@@ -17,9 +17,9 @@
 
 import datetime as dt
 import os
-import select
 import signal
 import sys
+import threading
 import time
 import traceback
 
@@ -183,26 +183,33 @@ def run_task(db, kind, row):
 
 
 def idle_wait(server, seconds):
-    """等下一轮扫描，同时响应网页端的目录代读请求。
+    """等下一轮扫描。目录代读由独立后台线程（serve_socket）常驻服务，这里只负责等待。
 
-    用 select 代替 sleep：网页上的「选择目录」需要在 1 秒内得到回应，
-    而同步间隔可能是 10 分钟。这里只处理「列目录」这一件事，不碰同步流程。
+    之所以把列目录拆到后台线程：同步（run_task）在主线程里是阻塞的，可能跑很久，
+    若只在空闲间隙服务 socket，浏览目录就会在同步期间超时（报「调度进程忙」）。
     """
     deadline = time.time() + seconds
     while not STOP:
         remain = deadline - time.time()
         if remain <= 0:
             return
-        if server is None:
-            time.sleep(min(1.0, remain))
-            continue
+        time.sleep(min(1.0, remain))
+
+
+def serve_socket(server):
+    """后台线程：时刻响应网页端的目录代读请求。
+
+    同步（run_task）在主线程里是阻塞的，可能跑几分钟甚至更久；如果只在空闲
+    间隙服务 socket，浏览目录的请求就会在同步期间超时（报「调度进程忙」）。
+    所以把列目录这件只读小事交给独立线程，主线程在同步时也不耽误网页端。
+    """
+    if server is None:
+        return
+    while not STOP:
         try:
-            ready, _, _ = select.select([server], [], [], min(1.0, remain))
-        except (OSError, ValueError):
-            time.sleep(min(1.0, remain))
-            continue
-        if ready:
             localroot.handle_one(server)
+        except Exception:  # noqa: BLE001 - 单条请求出错不影响整体服务
+            continue
 
 
 def main():
@@ -231,6 +238,11 @@ def main():
         except AttributeError:  # pragma: no cover
             uid = -1
         log("目录代读服务已就绪（uid=%d）" % uid)
+        # 独立后台线程常驻服务：同步（阻塞）进行时也能秒回网页端的列目录请求，
+        # 不再因为正忙而超时（报「调度进程忙」）。
+        threading.Thread(
+            target=serve_socket, args=(server,), name="filesync-browse", daemon=True
+        ).start()
 
     db = common.connect_db()
     initialize_schedule(db)
