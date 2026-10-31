@@ -354,9 +354,9 @@ class _PosixOS:
 
 
 class _Proc:
-    def __init__(self, code):
+    def __init__(self, code, stderr=b""):
         self.returncode = code
-        self.stderr = b""
+        self.stderr = stderr
         self.stdout = b""
 
 
@@ -383,10 +383,19 @@ try:
     except archive.ArchiveError as exc:
         raised = str(exc)
     check("退出码 2 才报错", "打包失败" in raised, raised)
+
+    archive.subprocess.run = lambda *a, **k: _Proc(
+        2, b"tar: /x.tar.gz.part: Wrote only 4096 of 10240 bytes\ntar: Error is not recoverable")
+    raised = ""
+    try:
+        archive._run_tar("/tmp", "web", "/tmp/x.tar.gz", [])
+    except archive.ArchiveError as exc:
+        raised = str(exc)
+    check("空间不足/配额给出明确提示", "空间不足" in raised or "配额" in raised, raised)
 finally:
     archive.subprocess.run = real_run
     archive.os = real_os
     archive.TAR_BIN = old_bin
 
 db.close()
-print("\n0.3.17 新功能全部测试通过")
+print("\n0.3.18 新功能全部测试通过")

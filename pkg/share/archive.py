@@ -87,6 +87,31 @@ def _clean_patterns(excludes):
     return patterns
 
 
+def _free_space(path):
+    try:
+        return shutil.disk_usage(path).free
+    except OSError:
+        return None
+
+
+def _tar_error(lines, returncode, target_dir):
+    """把 tar 的原始报错翻译成用户能看懂的话。
+
+    `Wrote only 4096 of 10240 bytes` / `No space left on device` /
+    `Disk quota exceeded` 都是「写不进去」——磁盘满或用户配额满，
+    和权限、路径无关，所以单独给一句明确的提示。
+    """
+    text = " ".join(lines).lower()
+    if ("no space left" in text or "wrote only" in text
+            or "disk quota exceeded" in text or "quota" in text):
+        free = _free_space(target_dir)
+        extra = "（备份目录所在卷当前剩余 %s）" % common.human_size(free) if free is not None else ""
+        return ("备份目录空间不足或用户配额已满%s。请清理空间、把「保留份数」调小，"
+                "或把备份目录换到空间更大的卷" % extra)
+    detail = " | ".join(lines[-3:]) if lines else "tar 代码 " + str(returncode)
+    return "打包失败：" + detail[:400]
+
+
 def _run_tar(parent, base, output, patterns, timeout=ARCHIVE_TIMEOUT):
     # Windows 上（仅本地调试）tar 不认 C:/ 这样的盘符路径，直接走 Python 兜底；
     # DSM 上始终是 Linux，用系统 tar 更快也更省内存。
@@ -105,8 +130,7 @@ def _run_tar(parent, base, output, patterns, timeout=ARCHIVE_TIMEOUT):
         # 会话文件极常见），此时包仍然完整可用，不能当成失败；>=2 才是真错误。
         if proc.returncode not in (0, 1):
             lines = proc.stderr.decode("utf-8", "replace").strip().splitlines()
-            detail = " | ".join(lines[-3:]) if lines else "tar 代码 " + str(proc.returncode)
-            raise ArchiveError("打包失败：" + detail[:400])
+            raise ArchiveError(_tar_error(lines, proc.returncode, os.path.dirname(output) or "."))
         return
 
     # 没有 tar 的环境（本地调试）用 Python 实现兜底，行为与 tar 一致
@@ -162,6 +186,12 @@ def create_archive(source, target_dir, keep=7, excludes=()):
             "请重装或重启套件让 run-as:root 生效）" % target_dir)
     except OSError as exc:
         raise ArchiveError("无法创建备份目录 %s：%s" % (target_dir, exc))
+
+    # 空间检查：卷只剩不到 2 MB 时直接给出明确提示，别等 tar 写到一半才失败
+    free = _free_space(target_dir)
+    if free is not None and free < 2 * 1024 * 1024:
+        raise ArchiveError("备份目录空间不足（仅剩 %s），请清理空间或换到更大的卷"
+                           % common.human_size(free))
 
     final = os.path.join(target_dir, archive_name(source))
     temp = final + ".part"
