@@ -120,6 +120,7 @@ button:disabled{opacity:.5;cursor:not-allowed}
   </div>
 </header>
 <main class="wrap">
+<div id="rootWarn" hidden style="margin:0 0 16px;padding:12px 14px;border-radius:8px;background:#fff0ef;color:#a21c14;border:1px solid #f3c2be;font-size:13px;line-height:1.7"></div>
 <div id="notice" class="status"></div>
 
 <section class="card">
@@ -952,6 +953,18 @@ async function groupAction(act, group, btn) {
   }
 }
 
+function showRootWarning(uid) {
+  const box = $('rootWarn');
+  if (uid == null || uid === 0) { box.hidden = true; box.textContent = ''; return; }
+  box.hidden = false;
+  box.innerHTML =
+    '⚠️ 调度进程当前以 <strong>uid ' + esc(String(uid)) + '</strong> 运行（不是 root），' +
+    '同步/备份写入 <code>/volume1/homes</code> 这类目录会报 Permission denied。<br>' +
+    '修法一：控制面板 → 任务计划 → 新增 → 用户定义的脚本（用户选 <strong>root</strong>），执行：<br>' +
+    '<code>sed -i \'s/"run-as": "package"/"run-as": "root"/\' /var/packages/FileSync/conf/privilege &amp;&amp; synopkg restart FileSync</code><br>' +
+    '修法二：File Station → 备份文件夹右键 → 属性 → 权限 → 新增 <code>filesync</code> 用户并勾选读写。';
+}
+
 async function load() {
   try {
     const data = await api('bootstrap');
@@ -967,6 +980,7 @@ async function load() {
     $('pauseBtn').textContent = paused ? '恢复调度' : '暂停调度';
     $('trashDays').value = state.settings.trash_days || '30';
     $('conflictCopy').value = state.settings.conflict_copy === '0' ? '0' : '1';
+    showRootWarning(data.worker && data.worker.uid);
     renderSites(); renderRuleSelects(); renderRules(); renderGroups();
     if (!groupMembers.length) resetGroupForm();
   } catch (e) { notice(e.message, 'error'); }
@@ -1298,7 +1312,7 @@ function previewApi(action, data) {
   const now = new Date();
   const iso = m => new Date(now.getTime() - m * 60000).toISOString();
   const db = {
-    version: '0.3.20-0001',
+    version: '0.3.21-0001',
     settings: { trash_days: '30', conflict_copy: '1', worker_paused: '0' },
     sites: [
       { id: 'local', name: '本机 · DiskStation', kind: 'local', host: '', port: 22, ssh_user: '', key_id: '', note: '', last_check: iso(3), last_ok: 1, last_check_msg: '本机路径可直接访问', caps_json: '{}' },

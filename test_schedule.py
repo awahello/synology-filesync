@@ -400,4 +400,4 @@ finally:
     archive.TAR_BIN = old_bin
 
 db.close()
-print("\n0.3.20 新功能全部测试通过")
+print("\n0.3.21 新功能全部测试通过")

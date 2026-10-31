@@ -126,10 +126,24 @@ def backup_fields(req, local_dir, label="规则"):
 def worker_running():
     try:
         pid = int(common.PID_PATH.read_text(encoding="utf-8").strip())
-        os.kill(pid, 0)
-        return pid
     except (OSError, ValueError):
         return 0
+    try:
+        os.kill(pid, 0)
+        return pid
+    except PermissionError:
+        # 进程存在，只是套件账号无权给它发信号（worker 以 root 运行）
+        return pid
+    except OSError:
+        return 0
+
+
+def worker_uid():
+    """读调度进程启动时写下的 uid；读不到返回 None。"""
+    try:
+        return int((common.PKG_VAR / "worker.uid").read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return None
 
 
 # --------------------------------------------------------------------------
@@ -149,7 +163,7 @@ def api_bootstrap(db):
         "groups": groups,
         "keys": keys,
         "settings": common.get_settings(db),
-        "worker": {"pid": worker_running()},
+        "worker": {"pid": worker_running(), "uid": worker_uid()},
     }
 
 

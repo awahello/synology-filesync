@@ -230,6 +230,16 @@ def main():
     write_pid()
     log("FileSync 调度进程启动，PID %d" % os.getpid())
 
+    # 记下当前 uid，网页端读它来判断调度进程是不是 root（不是就提示修复）
+    try:
+        _uid = os.geteuid()
+    except AttributeError:  # pragma: no cover
+        _uid = -1
+    try:
+        (common.PKG_VAR / "worker.uid").write_text(str(_uid), encoding="utf-8")
+    except OSError:
+        pass
+
     # 网页端（套件账号）读不到的目录由本进程代读，见 localroot.py
     server = localroot.start_server()
     if server is None:
