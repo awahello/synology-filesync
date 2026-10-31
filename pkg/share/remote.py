@@ -21,6 +21,7 @@ import tempfile
 from pathlib import Path
 
 import common
+import localroot
 
 # 系统级必须排除的目录（服务端就过滤掉，避免 @eaDir 里的海量缩略图拖慢扫描）
 SYSTEM_EXCLUDES = ("@eaDir", "#recycle", "#snapshot", ".filesync-trash", "@tmp")
@@ -433,6 +434,15 @@ def scan_local(directory):
     root = Path(directory)
     if not root.is_dir():
         raise RemoteError("本机目录不可用：" + directory)
+    # 先探一次目录权限：os.walk 遇到没权限的目录会静默跳过，
+    # 结果就是"0 个文件"，看起来像目录是空的，比直接报错更误导人。
+    try:
+        with os.scandir(str(root)):
+            pass
+    except PermissionError:
+        raise RemoteError("本机没有权限读取：" + directory)
+    except OSError as exc:
+        raise RemoteError("本机目录不可用：%s（%s）" % (directory, exc))
     result = {}
     skip_names = set(SYSTEM_EXCLUDES)
     for dirpath, dirnames, filenames in os.walk(str(root), followlinks=False):
@@ -570,7 +580,12 @@ def list_dirs_local(directory):
     except NotADirectoryError:
         raise RemoteError("这不是一个目录：" + directory)
     except PermissionError:
-        raise RemoteError("没有权限访问：" + directory)
+        # 套件账号进不去（/volume1/homes 这类只有 root 能列），
+        # 交给以 root 运行的调度进程代读，见 localroot.py
+        try:
+            names = localroot.list_dirs_via_worker(directory)
+        except localroot.LocalRootError as exc:
+            raise RemoteError("没有权限访问：%s（%s）" % (directory, exc))
     except OSError as exc:
         raise RemoteError("无法读取目录：%s" % exc)
     return _sort_names(names)

@@ -4,7 +4,7 @@
 
 **只传有变化的文件；三站时间强制一致；三站都没更新时只扫描、不传输。**
 
-**版本 0.3.9** · 平台 DSM 7.x · 架构 x86_64 · 作者 [AWA](https://www.akkdiy.cn)
+**版本 0.3.10** · 平台 DSM 7.x · 架构 x86_64 · 作者 [AWA](https://www.akkdiy.cn)
 
 ![界面截图](docs/screenshots/main.png)
 
@@ -193,6 +193,10 @@ FileSync 的做法是：**套件只装在 B（群晖）上，B 作为中转站**
 
 **Q：远端提示 `Permission denied (publickey)`？**
 公钥没装好。到「密钥管理」重新复制安装命令，到远端执行；或用 `cat >> ~/.ssh/authorized_keys` 单独粘贴公钥，注意不要被终端折行截断。
+
+**Q：选目录时提示「没有权限访问：/volume1/homes」？**
+`/volume1/homes` 这类目录是 `root:root 711`——能进去、但不允许列内容，而网页端是以套件账号 `filesync` 运行的。0.3.10 起，网页端读不到时会转交以 root 运行的调度进程代读，正常情况下能正常浏览。
+如果仍然报错，先看「套件中心 → 多站文件同步 → 查看日志」里有没有「目录代读服务已就绪」：没有就说明调度进程没起来（重新启动套件）。实在打不开时，也可以直接在地址栏输入完整路径，再点「选择此目录」——**列不出内容不影响使用该路径**，真正同步是由调度进程（root）执行的。
 
 **Q：OpenWrt 上「测试连接」失败？**
 检查 `/etc/config/dropbear` 是否允许 root 登录（`option RootLogin '1'`），以及 `/etc/dropbear/authorized_keys` 权限是否为 `600`。

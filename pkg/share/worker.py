@@ -17,6 +17,7 @@
 
 import datetime as dt
 import os
+import select
 import signal
 import sys
 import time
@@ -29,6 +30,7 @@ except ImportError:  # pragma: no cover
 
 import common
 import engine
+import localroot
 
 STOP = False
 TICK_SECONDS = 20
@@ -179,6 +181,29 @@ def run_task(db, kind, row):
             log("%s「%s」%s" % (label, row["name"], note))
 
 
+def idle_wait(server, seconds):
+    """等下一轮扫描，同时响应网页端的目录代读请求。
+
+    用 select 代替 sleep：网页上的「选择目录」需要在 1 秒内得到回应，
+    而同步间隔可能是 10 分钟。这里只处理「列目录」这一件事，不碰同步流程。
+    """
+    deadline = time.time() + seconds
+    while not STOP:
+        remain = deadline - time.time()
+        if remain <= 0:
+            return
+        if server is None:
+            time.sleep(min(1.0, remain))
+            continue
+        try:
+            ready, _, _ = select.select([server], [], [], min(1.0, remain))
+        except (OSError, ValueError):
+            time.sleep(min(1.0, remain))
+            continue
+        if ready:
+            localroot.handle_one(server)
+
+
 def main():
     signal.signal(signal.SIGTERM, stop_handler)
     signal.signal(signal.SIGINT, stop_handler)
@@ -195,6 +220,17 @@ def main():
     write_pid()
     log("FileSync 调度进程启动，PID %d" % os.getpid())
 
+    # 网页端（套件账号）读不到的目录由本进程代读，见 localroot.py
+    server = localroot.start_server()
+    if server is None:
+        log("目录代读服务未启动（无法创建 socket），网页端只能浏览有权限的目录")
+    else:
+        try:
+            uid = os.geteuid()
+        except AttributeError:  # pragma: no cover
+            uid = -1
+        log("目录代读服务已就绪（uid=%d）" % uid)
+
     db = common.connect_db()
     initialize_schedule(db)
 
@@ -202,7 +238,7 @@ def main():
         try:
             settings = common.get_settings(db)
             if settings.get("worker_paused") == "1":
-                time.sleep(TICK_SECONDS)
+                idle_wait(server, TICK_SECONDS)
                 continue
 
             for kind, row in due_tasks(db):
@@ -214,12 +250,10 @@ def main():
             log(traceback.format_exc().replace("\n", " | ")[:800])
             time.sleep(5)
 
-        for _ in range(TICK_SECONDS):
-            if STOP:
-                break
-            time.sleep(1)
+        idle_wait(server, TICK_SECONDS)
 
     log("FileSync 调度进程退出")
+    localroot.stop_server(server)
     clear_pid()
     try:
         os.close(singleton)

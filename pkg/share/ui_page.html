@@ -468,7 +468,7 @@ async function browseDir(path, fallbackToRoot) {
     renderCrumbs(target);
     $('dirUpBtn').disabled = (target === '/');
     $('dirList').innerHTML = '<div class="empty">' + esc(e.message) + '</div>';
-    $('dirHint').textContent = '读取失败。可以直接在地址栏输入完整路径后回车，或先回到 / 再逐级进入。';
+    $('dirHint').textContent = '读取失败。可以在地址栏输入完整路径后回车；即使列不出内容，也能点「选择此目录」直接使用这个路径。';
   }
 }
 
@@ -1233,7 +1233,7 @@ function previewApi(action, data) {
   const now = new Date();
   const iso = m => new Date(now.getTime() - m * 60000).toISOString();
   const db = {
-    version: '0.3.9-0001',
+    version: '0.3.10-0001',
     settings: { trash_days: '30', conflict_copy: '1', worker_paused: '0' },
     sites: [
       { id: 'local', name: '本机 · DiskStation', kind: 'local', host: '', port: 22, ssh_user: '', key_id: '', note: '', last_check: iso(3), last_ok: 1, last_check_msg: '本机路径可直接访问', caps_json: '{}' },
