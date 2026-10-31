@@ -39,7 +39,7 @@ CSRF_PATH = PKG_VAR / "csrf.key"
 PID_PATH = PKG_VAR / "worker.pid"
 LOG_PATH = PKG_VAR / "worker.log"
 
-APP_VERSION = "0.2.5-0001"
+APP_VERSION = "0.2.7-0001"
 AUTH_CGI = "/usr/syno/synoman/webman/modules/authenticate.cgi"
 AUTH_DIAGNOSTIC = "DSM 会话验证未完成。"
 MAX_BODY = 262144
@@ -175,7 +175,7 @@ CREATE INDEX IF NOT EXISTS idx_baseline_rule ON baseline(rule_id);
 
 DEFAULT_SETTINGS = {
     "trash_days": "30",        # 回收站保留天数，0 表示永久保留
-    "conflict_copy": "1",      # 冲突覆盖前是否保留败方副本
+    "conflict_copy": "0",      # 冲突时直接覆盖（0）；覆盖前保留败方副本（1）
     "worker_paused": "0",      # 全局暂停调度
 }
 

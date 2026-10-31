@@ -610,6 +610,29 @@ def api_save_settings(db, req):
     return {"ok": True}
 
 
+def api_clear_trash(db, req):
+    """清理所有同步目录下的 .filesync-trash 回收站。"""
+    targets = set()
+    for row in db.execute("SELECT site_a, dir_a, site_b, dir_b FROM rules"):
+        targets.add((row["site_a"], row["dir_a"]))
+        targets.add((row["site_b"], row["dir_b"]))
+    for row in db.execute("SELECT site_id, dir FROM group_members"):
+        targets.add((row["site_id"], row["dir"]))
+    cleared = 0
+    for site_id, directory in targets:
+        if not site_id or not directory:
+            continue
+        try:
+            site = engine.load_site(db, site_id)
+        except engine.RuleError:
+            continue
+        try:
+            cleared += remote.clear_trash(site, directory)
+        except remote.RemoteError:
+            continue
+    return {"ok": True, "cleared": cleared}
+
+
 # --------------------------------------------------------------------------
 # 分发
 # --------------------------------------------------------------------------
@@ -632,6 +655,7 @@ POST_HANDLERS = {
     "test_group": api_test_group,
     "browse": api_browse,
     "logs": api_logs,
+    "clear_trash": api_clear_trash,
     "save_settings": api_save_settings,
 }
 

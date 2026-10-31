@@ -256,6 +256,11 @@ head, body = run(["cgi_app.py"], method="POST", body={"action": "logs", "id": ".
                  extra_env={"HTTP_X_CSRF_TOKEN": csrf_token})
 check("非法编号被拒", "400" in head and json.loads(body)["ok"] is False, body)
 
+head, body = run(["cgi_app.py"], method="POST", body={"action": "clear_trash"},
+                 extra_env={"HTTP_X_CSRF_TOKEN": csrf_token})
+data = json.loads(body)
+check("清理回收站成功", data.get("ok") is True and isinstance(data.get("cleared"), int), data)
+
 print("\nCGI 层全部测试通过")
 import shutil
 shutil.rmtree(SANDBOX, ignore_errors=True)

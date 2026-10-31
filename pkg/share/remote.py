@@ -862,6 +862,20 @@ def purge_trash(site, directory, keep_days):
     run_ssh(site, script, timeout=600)
 
 
+def clear_trash(site, directory, timeout=600):
+    """删除同步目录下的 .filesync-trash 回收站。"""
+    if site["kind"] == "local":
+        path = os.path.join(directory, common.TRASH_NAME)
+        if not os.path.isdir(path):
+            return 0
+        shutil.rmtree(path, ignore_errors=True)
+        return 1
+    script = "cd %s 2>/dev/null || exit 0; rm -rf %s 2>/dev/null; echo done" % (
+        shlex.quote(directory), shlex.quote(common.TRASH_NAME))
+    rc, out, err = run_ssh(site, script, timeout=timeout)
+    return 1 if "done" in out else 0
+
+
 def ensure_remote_dir(site, directory, timeout=60):
     rc, out, err = run_ssh(site, "mkdir -p %s 2>/dev/null && test -d %s && echo ok" % (
         shlex.quote(directory), shlex.quote(directory)), timeout=timeout)

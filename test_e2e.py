@@ -53,6 +53,8 @@ def check(label, condition, detail=""):
 
 
 db = common.connect_db()
+# 本测试验证「冲突保留副本」，显式开启（产品默认已改为直接覆盖）
+common.set_setting(db, "conflict_copy", "1")
 now = common.now_iso()
 db.execute("INSERT INTO sites(id,name,kind,host,port,ssh_user,created) VALUES('siteB','B站','local','',22,'',?)", (now,))
 db.commit()

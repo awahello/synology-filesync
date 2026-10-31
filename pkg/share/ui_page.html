@@ -217,12 +217,14 @@ button:disabled{opacity:.5;cursor:not-allowed}
   <div class="row">
     <div class="field small"><label for="trashDays">回收站保留天数</label><input id="trashDays" type="number" min="0" max="3650" value="30"></div>
     <div class="field"><label for="conflictCopy">冲突处理</label><select id="conflictCopy">
-      <option value="1">覆盖前保留败方副本到回收站（推荐）</option>
-      <option value="0">直接以最新文件覆盖，不保留副本</option>
+      <option value="0">直接以最新文件覆盖，不保留副本（推荐）</option>
+      <option value="1">覆盖前保留败方副本到回收站</option>
     </select></div>
     <button class="secondary" id="saveSettingsBtn">保存设置</button>
+    <button class="secondary" id="clearTrashBtn">清理回收站</button>
   </div>
-  <p class="hint">回收站目录为各同步目录下的 <code>.filesync-trash</code>，按时间分文件夹保存，超过保留天数自动清理。设为 0 表示永久保留。</p>
+  <p class="hint">同步删除文件或覆盖冲突时，旧文件会移入各同步目录下的 <code>.filesync-trash</code>，超过保留天数自动清理，设为 0 表示永久保留。选「直接覆盖」则不会产生副本。若不想看到该目录，可在同步组的删除处理里选「不跟随」，再点「清理回收站」。</p>
+  <p class="hint">重要：网站目录请把 <code>config.inc.php</code>、<code>.htaccess</code> 等各站不同的配置文件加入「排除规则」，否则可能被另一站的旧版本覆盖，导致网站报错。</p>
 </section>
 
 <div class="footer">
@@ -756,7 +758,7 @@ async function groupAction(act, group, btn) {
       try {
         const d = await api('logs', { id: 'group:' + group.id });
         $('logBody').innerHTML = (d.runs || []).map(r =>
-          '<div><span class="' + (r.status === 'error' ? 'e' : r.status === 'ok' ? 'g' : '') + '">[' + esc(r.started) + '] ' +
+          '<div style="white-space:pre-wrap;word-break:break-all"><span class="' + (r.status === 'error' ? 'e' : r.status === 'ok' ? 'g' : '') + '">[' + esc(r.started) + '] ' +
           esc(r.status === 'ok' ? '成功' : r.status === 'error' ? '失败' : '进行中') + ' ' + esc(r.message) + '</span></div>'
         ).join('') || '暂无记录';
       } catch (e) {
@@ -823,7 +825,7 @@ async function ruleAction(act, rule, btn) {
       try {
         const d = await api('logs', { id: rule.id });
         $('logBody').innerHTML = (d.runs || []).map(r =>
-          '<div><span class="' + (r.status === 'error' ? 'e' : r.status === 'ok' ? 'g' : '') + '">[' + esc(r.started) + '] ' +
+          '<div style="white-space:pre-wrap;word-break:break-all"><span class="' + (r.status === 'error' ? 'e' : r.status === 'ok' ? 'g' : '') + '">[' + esc(r.started) + '] ' +
           esc(r.status === 'ok' ? '成功' : r.status === 'error' ? '失败' : '进行中') + ' ' + esc(r.message) + '</span></div>'
         ).join('') || '暂无记录';
       } catch (e) {
@@ -1053,6 +1055,14 @@ $('saveSettingsBtn').addEventListener('click', async () => {
     await load();
   } catch (e) { notice(e.message, 'error'); }
 });
+$('clearTrashBtn').addEventListener('click', async () => {
+  if (!confirm('清理所有同步目录下的 .filesync-trash 回收站？清理后其中的旧文件将无法恢复。')) return;
+  try {
+    const d = await api('clear_trash', {});
+    notice('已清理 ' + (d.cleared || 0) + ' 个回收站。', 'good');
+    await load();
+  } catch (e) { notice(e.message, 'error'); }
+});
 $('pauseBtn').addEventListener('click', async () => {
   try {
     const paused = state.settings.worker_paused === '1';
@@ -1086,7 +1096,7 @@ function previewApi(action, data) {
   const now = new Date();
   const iso = m => new Date(now.getTime() - m * 60000).toISOString();
   const db = {
-    version: '0.2.5-0001',
+    version: '0.2.7-0001',
     settings: { trash_days: '30', conflict_copy: '1', worker_paused: '0' },
     sites: [
       { id: 'local', name: '本机 · DiskStation', kind: 'local', host: '', port: 22, ssh_user: '', key_id: '', note: '', last_check: iso(3), last_ok: 1, last_check_msg: '本机路径可直接访问', caps_json: '{}' },
