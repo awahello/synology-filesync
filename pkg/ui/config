@@ -1,0 +1,14 @@
+{
+  "FileSync.js": {
+    "SYNO.SDS.App.FileSync.Instance": {
+      "type": "app",
+      "title": "多站文件同步",
+      "appWindow": "SYNO.SDS.App.FileSync.Instance",
+      "allUsers": false,
+      "allowMultiInstance": false,
+      "hidden": false,
+      "icon": "images/icon_64.png",
+      "depend": []
+    }
+  }
+}

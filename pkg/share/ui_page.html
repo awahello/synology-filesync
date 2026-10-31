@@ -1,0 +1,1144 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>多站文件同步</title><style nonce="__NONCE__">
+:root{color-scheme:light;--ink:#17212b;--muted:#657383;--line:#dbe2e8;--blue:#1769aa;--blue-dark:#12507f;--bg:#f3f6f8;--card:#fff;--good:#177245;--bad:#b42318;--warn:#8a5200}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;color:var(--ink)}
+header{background:linear-gradient(120deg,#123c5a,#1a5c86);color:#fff;padding:20px max(24px,calc((100% - 1160px)/2));display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
+header h1{font-size:21px;margin:0;display:flex;align-items:center;gap:10px}
+header .sub{font-size:13px;color:#cde3f2;margin-top:3px}
+.head-actions{display:flex;gap:8px;align-items:center}
+.wrap{max-width:1160px;margin:22px auto 0;padding:0 18px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px;margin:0 0 18px;box-shadow:0 2px 8px #17324d0b}
+.card h2{font-size:17px;margin:0 0 4px;display:flex;align-items:center;gap:8px}
+.card .desc{color:var(--muted);font-size:13px;margin:0 0 16px}
+.row{display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap}
+.field{display:flex;flex-direction:column;gap:5px;min-width:140px;flex:1}
+.field.small{flex:0 0 110px;min-width:110px}
+.field.tiny{flex:0 0 84px;min-width:84px}
+label{font-weight:600;font-size:13px;color:#31414f}
+.hint,.muted{color:var(--muted);font-size:13px}
+.hint{margin:6px 0 0;line-height:1.5}
+input,select,textarea{font:inherit;border:1px solid #b9c6d0;border-radius:7px;padding:9px 10px;background:#fff;color:var(--ink);width:100%}
+input:focus,select:focus,textarea:focus{outline:2px solid #9cc7e6;outline-offset:-1px;border-color:var(--blue)}
+input[readonly]{background:#f2f5f7;color:#4a5a68}
+textarea{resize:vertical;min-height:64px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px}
+button{border:0;border-radius:7px;background:var(--blue);color:#fff;font:600 14px inherit;padding:9px 15px;cursor:pointer;white-space:nowrap}
+button:hover{background:var(--blue-dark)}
+button.secondary{background:#e8eef3;color:#253746}
+button.secondary:hover{background:#dbe4ec}
+button.danger{background:#fff0ef;color:#a21c14}
+button.danger:hover{background:#ffe1de}
+button.ghost{background:transparent;color:#cde3f2;border:1px solid #ffffff45}
+button.ghost:hover{background:#ffffff1f}
+button:disabled{opacity:.5;cursor:not-allowed}
+.site-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px}
+.site{border:1px solid var(--line);border-radius:10px;padding:14px;background:#fbfdfe;position:relative;max-width:460px}
+.site.local{border-color:#bcd9ec;background:#f4fafd}
+.site h3{margin:0 0 4px;font-size:15px;display:flex;align-items:center;gap:7px}
+.site .meta{font-size:12.5px;color:var(--muted);line-height:1.6;overflow-wrap:anywhere}
+.site .ops{display:flex;gap:6px;margin-top:10px;flex-wrap:wrap}
+.site .ops button{padding:5px 9px;font-size:12.5px}
+.tag{display:inline-block;font-size:11px;font-weight:600;padding:1px 7px;border-radius:999px;background:#e8eef3;color:#253746}
+.tag.local{background:#d9ecf8;color:#12507f}
+.tag.openwrt{background:#e8f0ff;color:#2b4fa0}
+.tag.linux{background:#eef3e8;color:#4a6b28}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block;background:#9aa8b4;flex:0 0 8px}
+.dot.ok{background:#1f9d5c}.dot.bad{background:#d13438}.dot.unknown{background:#b3bfc9}
+.rule{border-top:1px solid var(--line);padding:14px 0;display:grid;grid-template-columns:1fr auto;gap:12px;align-items:start}
+.rule:first-child{border-top:0}
+.rule h3{font-size:15px;margin:0 0 5px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.rule .meta{font-size:13px;color:var(--muted);line-height:1.7}
+.rule .meta code{background:#eef2f5;padding:1px 5px;border-radius:4px;font-size:12px}
+.ops{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+.ops button{padding:6px 11px;font-size:13px}
+.member-row{display:flex;gap:10px;align-items:center;margin-bottom:8px;flex-wrap:wrap}
+.member-row select{flex:0 0 210px;min-width:170px}
+.member-row input{flex:1;min-width:200px}
+.member-row button{padding:8px 12px;font-size:13px}
+.withbtn{display:flex;gap:8px;align-items:center}
+.withbtn input{flex:1;min-width:120px}
+.withbtn button{padding:9px 12px;font-size:13px}
+.dirbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+.dirbar input{flex:1;min-width:200px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px}
+.dirbar button{padding:9px 12px;font-size:13px}
+.crumbs{display:flex;flex-wrap:wrap;align-items:center;gap:4px;margin-bottom:10px;font-size:13px;min-height:24px}
+.crumbs button{background:#eef3f8;color:#1769aa;padding:3px 8px;font-size:12.5px;font-weight:600}
+.crumbs button:hover{background:#e0eaf4}
+.crumbs .sep{color:#9aa8b4}
+.crumbs .cur{font-weight:600;color:#31414f}
+.dirlist{border:1px solid var(--line);border-radius:9px;max-height:44vh;overflow:auto;background:#fbfdfe}
+.dirlist .drow{display:flex;align-items:center;gap:9px;width:100%;padding:9px 12px;border:0;border-top:1px solid #eef2f5;border-radius:0;background:transparent;color:var(--ink);font:400 13.5px inherit;text-align:left;white-space:normal;overflow-wrap:anywhere}
+.dirlist .drow:first-child{border-top:0}
+.dirlist .drow:hover{background:#eaf4fb}
+.dirlist .ic{flex:0 0 16px;width:16px;height:12px;border-radius:2px;background:#9cc7e6;position:relative;margin-top:1px}
+.dirlist .ic:before{content:"";position:absolute;left:0;top:-3px;width:7px;height:3px;border-radius:2px 2px 0 0;background:#9cc7e6}
+.dirlist .empty{padding:24px 12px;text-align:center;color:var(--muted);font-size:13px}
+.member-list{display:flex;flex-wrap:wrap;gap:6px;margin-top:2px}
+.member-chip{font-size:12.5px;background:#eef3f8;border-radius:6px;padding:3px 8px;color:#31414f;overflow-wrap:anywhere}
+.member-chip code{background:transparent;padding:0;color:#1769aa}
+.status{padding:10px 13px;border-radius:8px;margin-bottom:16px;background:#e9f3f9;color:#1a4a69;display:none}
+.status.show{display:block}
+.status.error{background:#fff0ef;color:var(--bad)}
+.status.good{background:#e9f6ef;color:var(--good)}
+.status.warn{background:#fff6e6;color:var(--warn)}
+.badge{display:inline-block;font-size:11px;font-weight:600;padding:1px 7px;border-radius:999px;background:#e8eef3;color:#253746}
+.badge.ok{background:#e2f4ea;color:var(--good)}
+.badge.err{background:#ffe8e6;color:var(--bad)}
+.badge.run{background:#e6f0fa;color:var(--blue)}
+.badge.off{background:#eef1f4;color:#68757f}
+.modal{position:fixed;inset:0;background:#0e1c2a88;display:none;align-items:center;justify-content:center;padding:18px;z-index:50}
+.modal.open{display:flex}
+.dialog{background:#fff;border-radius:12px;width:min(760px,100%);max-height:88vh;display:flex;flex-direction:column;padding:20px}
+.dialog.wide{width:min(980px,100%)}
+.dialog-head{display:flex;justify-content:space-between;align-items:center;gap:12px}
+.dialog-head strong{font-size:17px}
+.dialog-body{overflow:auto;margin:14px 0;flex:1}
+.keybox{background:#0f2233;color:#c9e3f5;border-radius:8px;padding:12px;font:12.5px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;word-break:break-all;user-select:all}
+.logbox{background:#0f2233;color:#c9e3f5;border-radius:8px;padding:12px;font:12.5px/1.7 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;word-break:break-word;max-height:52vh;overflow:auto}
+.logbox .e{color:#ff9d95}.logbox .w{color:#ffd08a}.logbox .g{color:#8fe3b0}
+.steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px;margin-top:14px}
+.step{border:1px solid var(--line);border-radius:9px;padding:12px;background:#fbfdfe}
+.step b{display:block;font-size:13.5px;margin-bottom:4px}
+.step span{font-size:12.5px;color:var(--muted);line-height:1.55;display:block}
+.step code{background:#eef2f5;padding:1px 5px;border-radius:4px;font-size:11.5px;overflow-wrap:anywhere}
+.footer{padding:4px 4px 28px;color:var(--muted);font-size:12px;line-height:1.7}
+.hidden{display:none!important}
+.stat-row{display:flex;gap:22px;flex-wrap:wrap;margin-top:4px}
+.stat b{display:block;font-size:22px;line-height:1.2}
+.stat span{font-size:12px;color:var(--muted)}
+@media(max-width:680px){header{padding:16px}.card{padding:15px}.rule{grid-template-columns:1fr}.ops{justify-content:flex-start}}
+</style></head><body>
+<header>
+  <div><h1>多站文件同步 <span class="tag" id="verTag">v0.1.0</span></h1>
+  <div class="sub">在站点之间按最新修改时间互相同步，删除可跟随</div></div>
+  <div class="head-actions">
+    <span class="badge" id="workerBadge">调度器状态读取中</span>
+    <button class="ghost" id="pauseBtn">暂停调度</button>
+    <button class="ghost" id="refreshBtn">刷新</button>
+  </div>
+</header>
+<main class="wrap">
+<div id="notice" class="status"></div>
+
+<section class="card">
+  <h2>站点</h2>
+  <p class="desc">本机是套件所在群晖，固定存在。添加 OpenWrt 或 Linux 站点时，需要对方开启 SSH 并授权本套件的公钥。</p>
+  <div class="site-grid" id="siteGrid"></div>
+  <div class="row" style="margin-top:14px"><button id="addSiteBtn">+ 添加站点</button>
+  <button class="secondary" id="keyBtn">密钥管理</button></div>
+  <div class="stat-row" id="statRow"></div>
+</section>
+
+<section class="card" id="ruleFormCard">
+  <h2 id="ruleFormTitle">新建同步规则</h2>
+  <p class="desc" id="ruleFormDesc">一条规则描述「哪个目录」和「哪个目录」之间怎么同步。双向规则会以修改时间较新的一侧为准。</p>  <div class="row">
+    <div class="field"><label for="ruleName">规则名称</label><input id="ruleName" maxlength="80" placeholder="例如：照片互备"></div>
+    <div class="field small"><label for="intervalMin">执行间隔</label><input id="intervalMin" type="number" min="1" max="10080" value="10"></div>
+    <div class="field tiny"><label>&nbsp;</label><span class="hint" style="margin:9px 0 0">分钟</span></div>
+  </div>
+  <div class="row" style="margin-top:12px">
+    <div class="field"><label for="siteA">A 端站点</label><select id="siteA"></select></div>
+    <div class="field"><label for="dirA">A 端目录</label>
+      <div class="withbtn"><input id="dirA" placeholder="/volume1/photo" spellcheck="false"><button class="secondary" id="pickDirA">选择</button></div>
+    </div>
+  </div>
+  <div class="row" style="margin-top:12px">
+    <div class="field"><label for="siteB">B 端站点</label><select id="siteB"></select></div>
+    <div class="field"><label for="dirB">B 端目录</label>
+      <div class="withbtn"><input id="dirB" placeholder="/mnt/data/photo" spellcheck="false"><button class="secondary" id="pickDirB">选择</button></div>
+    </div>
+  </div>
+  <div class="row" style="margin-top:12px">
+    <div class="field"><label for="ruleMode">同步方向</label><select id="ruleMode">
+      <option value="both">双向同步（两边互为镜像，最新者胜）</option>
+      <option value="a2b">A → B 单向备份（B 跟随 A）</option>
+      <option value="b2a">B → A 单向备份（A 跟随 B）</option>
+    </select></div>
+    <div class="field"><label for="deletePolicy">删除处理</label><select id="deletePolicy">
+      <option value="trash">跟随删除 · 移入回收站（推荐，可恢复）</option>
+      <option value="purge">跟随删除 · 直接删除</option>
+      <option value="keep">不跟随删除 · 保留文件</option>
+    </select></div>
+  </div>
+  <div class="row" style="margin-top:12px">
+    <div class="field"><label for="ruleExcludes">排除规则（每行一条，支持 * 通配）</label>
+      <textarea id="ruleExcludes" placeholder="*.log&#10;cache/&#10;node_modules"></textarea></div>
+  </div>
+  <div class="row" style="margin-top:14px">
+    <button id="saveRuleBtn">保存规则</button>
+    <button class="secondary" id="cancelEditBtn" hidden>取消编辑</button>
+    <span class="hint" style="margin:0">保存后调度器会在几秒内开始第一轮同步。</span>
+  </div>
+</section>
+
+<section class="card">
+  <h2>同步规则</h2>
+  <p class="desc">点击「预演」只扫描并对比，不传输任何文件，可以先用它确认两边差异。</p>
+  <div id="ruleList"><span class="muted">正在加载…</span></div>
+</section>
+
+<section class="card" id="groupFormCard">
+  <h2 id="groupFormTitle">新建多站互备</h2>
+  <p class="desc">三个及以上站点互相同步。<strong>先</strong>扫描所有站点，挑出每个文件修改时间最新的版本拉回本机，<strong>再</strong>从本机推给其余站点。本机负责中转，所以 A 站与 C 站之间不需要能互相访问。</p>
+  <div class="row">
+    <div class="field"><label for="gName">组名称</label><input id="gName" maxlength="80" placeholder="例如：三站照片互备"></div>
+    <div class="field small"><label for="gInterval">执行间隔</label><input id="gInterval" type="number" min="1" max="10080" value="10"></div>
+    <div class="field tiny"><label>&nbsp;</label><span class="hint" style="margin:9px 0 0">分钟</span></div>
+  </div>
+  <div style="margin-top:14px">
+    <label style="display:block;margin-bottom:8px">成员（至少 2 个，必须包含本机）</label>
+    <div id="gMemberList"></div>
+    <button class="secondary" id="gAddMember" style="margin-top:4px">+ 添加成员</button>
+  </div>
+  <div class="row" style="margin-top:14px">
+    <div class="field"><label for="gDelete">删除处理</label><select id="gDelete">
+      <option value="trash">多数成员删除后跟随删除 · 移入回收站（推荐）</option>
+      <option value="purge">多数成员删除后跟随删除 · 直接删除</option>
+      <option value="keep">不跟随删除 · 保留文件</option>
+    </select></div>
+    <div class="field"><label for="gExcludes">排除规则（每行一条）</label><textarea id="gExcludes" placeholder="*.log&#10;cache/"></textarea></div>
+  </div>
+  <div class="row" style="margin-top:14px">
+    <button id="gSaveBtn">保存同步组</button>
+    <button class="secondary" id="gCancelBtn" hidden>取消编辑</button>
+    <span class="hint" style="margin:0">三站中要有两个站都删了同一文件才会真的删，单个站误删不会波及全部。</span>
+  </div>
+</section>
+
+<section class="card">
+  <h2>同步组</h2>
+  <p class="desc">每个文件以修改时间最新的那个版本为准，其余站点会被更新成它。</p>
+  <div id="groupList"><span class="muted">正在加载…</span></div>
+</section>
+
+<section class="card">
+  <h2>同步设置</h2>
+  <div class="row">
+    <div class="field small"><label for="trashDays">回收站保留天数</label><input id="trashDays" type="number" min="0" max="3650" value="30"></div>
+    <div class="field"><label for="conflictCopy">冲突处理</label><select id="conflictCopy">
+      <option value="1">覆盖前保留败方副本到回收站（推荐）</option>
+      <option value="0">直接以最新文件覆盖，不保留副本</option>
+    </select></div>
+    <button class="secondary" id="saveSettingsBtn">保存设置</button>
+  </div>
+  <p class="hint">回收站目录为各同步目录下的 <code>.filesync-trash</code>，按时间分文件夹保存，超过保留天数自动清理。设为 0 表示永久保留。</p>
+</section>
+
+<div class="footer">
+  工作原理：<strong>两站规则</strong>拿两端清单和上次同步基线做三向比较，只传新增或修改的文件，冲突以修改时间较新者为准；<strong>多站互备</strong>每轮扫描全部成员，逐个文件挑出最新版本先拉回本机、再推给其余成员，删除需要多数成员同意（三站里两个站删了才真的删）。<br>
+  同一个目录不要同时出现在两站规则和同步组里，两套基线会互相打架。<br>
+  套件以 DSM 服务账号运行，需要读取共享文件夹的权限，因此安装时会被加入 administrators 组。SSH 私钥仅保存在本机 <code>/var/packages/FileSync/var/keys</code>，权限 0600。<br>
+  © 2026 AWA · www.akkdiy.cn。免责声明：本套件按「现状」提供，请在正式启用前用「预演」确认同步范围，并自行做好重要数据的独立备份。
+</div>
+</main>
+
+<div class="modal" id="siteModal"><div class="dialog">
+  <div class="dialog-head"><strong id="siteModalTitle">添加站点</strong><button class="secondary" id="closeSiteModal">关闭</button></div>
+  <div class="dialog-body">
+    <div class="row">
+      <div class="field"><label for="sName">站点名称</label><input id="sName" maxlength="60" placeholder="例如：A 站 · 路由器"></div>
+      <div class="field small"><label for="sKind">类型</label><select id="sKind">
+        <option value="openwrt">OpenWrt / 路由</option>
+        <option value="linux">Linux / 群晖 / VPS</option>
+      </select></div>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <div class="field"><label for="sHost">地址（IP 或域名）</label><input id="sHost" placeholder="192.168.1.1" spellcheck="false"></div>
+      <div class="field tiny"><label for="sPort">SSH 端口</label><input id="sPort" type="number" min="1" max="65535" value="22"></div>
+      <div class="field small"><label for="sUser">SSH 用户</label><input id="sUser" value="root" spellcheck="false"></div>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <div class="field"><label for="sKey">使用的密钥</label><select id="sKey"></select></div>
+      <div class="field"><label for="sNote">备注</label><input id="sNote" maxlength="120" placeholder="可选"></div>
+    </div>
+    <p class="hint" id="siteKeyHint">定时同步必须免密，所以要用密钥登录。远端站点需要先授权本套件的公钥：打开「密钥管理」点「复制安装命令」，到对方机器的终端粘贴执行一次即可，<code>OpenWrt</code> 与 <code>Linux</code> 通用。</p>
+    <div class="steps" id="siteSteps">
+      <div class="step"><b>① 复制安装命令</b><span>在「密钥管理」里点「复制安装命令」，一条命令同时覆盖 dropbear 和 ~/.ssh。</span></div>
+      <div class="step"><b>② 到对方机器执行</b><span>粘贴到终端，看到 <code>OK</code> 就装好了。重复执行不会写重复行，也不影响原来的密码登录。</span></div>
+      <div class="step"><b>③ 测试连接</b><span>回到这里点「测试连接」，成功会显示对方系统与 rsync 版本。</span></div>
+    </div>
+  </div>
+  <div class="row"><button id="saveSiteBtn">保存站点</button><button class="secondary" id="testSiteBtn">测试连接</button>
+  <button class="danger" id="delSiteBtn" hidden>删除站点</button></div>
+</div></div>
+
+<div class="modal" id="keyModal"><div class="dialog">
+  <div class="dialog-head"><strong>密钥管理</strong><button class="secondary" id="closeKeyModal">关闭</button></div>
+  <div class="dialog-body">
+    <p class="hint" style="margin-top:0">密钥只在本机生成，私钥不会离开群晖。点「复制安装命令」，到对方机器的终端粘贴执行一次，看到 <code>OK</code> 就装好了——这条命令对 OpenWrt 和 Linux 都适用，重复执行也不会写重复。</p>
+    <div class="row"><div class="field"><label for="keyName">新建密钥名称</label><input id="keyName" maxlength="60" placeholder="例如：同步专用"></div>
+    <button id="genKeyBtn">生成密钥</button></div>
+    <div id="keyList" style="margin-top:16px"></div>
+  </div>
+</div></div>
+
+<div class="modal" id="logModal"><div class="dialog wide">
+  <div class="dialog-head"><strong id="logTitle">同步日志</strong><button class="secondary" id="closeLogModal">关闭</button></div>
+  <div class="dialog-body"><div class="logbox" id="logBody">加载中…</div></div>
+</div></div>
+
+<div class="modal" id="dirModal"><div class="dialog">
+  <div class="dialog-head"><strong id="dirModalTitle">选择目录</strong><button class="secondary" id="closeDirModal">关闭</button></div>
+  <div class="dialog-body">
+    <div class="crumbs" id="dirCrumbs"></div>
+    <div class="dirbar">
+      <input id="dirPath" spellcheck="false" placeholder="/">
+      <button class="secondary" id="dirGoBtn">前往</button>
+      <button class="secondary" id="dirUpBtn">上一级</button>
+    </div>
+    <div class="dirlist" id="dirList"><div class="empty">读取中…</div></div>
+    <p class="hint" id="dirHint" style="margin:8px 0 0">点目录名进入下一级，也可以在地址栏直接输入完整路径后回车。确认无误后点下面的「选择此目录」。</p>
+  </div>
+  <div class="row"><button id="dirPickBtn">选择此目录</button><button class="secondary" id="closeDirModal2">取消</button></div>
+</div></div>
+
+<script nonce="__NONCE__">
+const CSRF = '__CSRF__', DSM_TOKEN = __SYNO_TOKEN__;
+const PREVIEW = CSRF === 'preview';
+const $ = id => document.getElementById(id);
+let state = { sites: [], rules: [], groups: [], keys: [], settings: {} };
+let editingRule = null, editingSite = null, editingGroup = null;
+let groupMembers = [];
+let userPickedB = false;  // 用户是否手动选过 B 端站点，选过就不再自动纠正
+
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// DSM 走 http:// 时不是安全上下文，navigator.clipboard 不可用，需要 execCommand 兜底
+function copyText(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    return navigator.clipboard.writeText(text);
+  }
+  return new Promise(function (resolve, reject) {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.top = '-1000px';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    ta.setSelectionRange(0, text.length);
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+    document.body.removeChild(ta);
+    ok ? resolve() : reject(new Error('浏览器拒绝了复制操作'));
+  });
+}
+
+// 生成一条能直接在对方终端粘贴执行的命令。
+// 用变量 K 存公钥，避免同一条公钥在命令里出现两次（长度翻倍更容易被换行破坏）。
+function installCommand(publicLine) {
+  const q = "'" + publicLine + "'";
+  return 'K=' + q + ';D="$HOME/.ssh";[ -d /etc/dropbear ]&&D=/etc/dropbear;mkdir -p "$D";'
+    + 'grep -qxF "$K" "$D/authorized_keys" 2>/dev/null||echo "$K">>"$D/authorized_keys";'
+    + 'chmod 600 "$D/authorized_keys";echo OK';
+}
+function notice(msg, kind) {
+  const n = $('notice');
+  n.textContent = msg;
+  n.className = 'status show ' + (kind || '');
+  clearTimeout(n._t);
+  n._t = setTimeout(() => { n.className = 'status'; }, kind === 'error' ? 12000 : 6000);
+}
+function fmtTime(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  const diff = (Date.now() - d.getTime()) / 1000;
+  if (diff >= 0 && diff < 60) return '刚刚';
+  if (diff >= 0 && diff < 3600) return Math.floor(diff / 60) + ' 分钟前';
+  return d.toLocaleString('zh-CN', {month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false});
+}
+
+async function api(action, data) {
+  if (PREVIEW) return previewApi(action, data);
+  const opts = { method: data ? 'POST' : 'GET', credentials: 'same-origin', cache: 'no-store', headers: { 'Accept': 'application/json' } };
+  if (DSM_TOKEN) opts.headers['X-SYNO-TOKEN'] = DSM_TOKEN;
+  let url = 'api.cgi?action=' + encodeURIComponent(action);
+  if (data) {
+    opts.headers['Content-Type'] = 'application/json';
+    opts.headers['X-CSRF-Token'] = CSRF;
+    opts.body = JSON.stringify(Object.assign({}, data, { action: action }));
+  }
+  const res = await fetch(url, opts);
+  const json = await res.json().catch(() => ({ ok: false, error: '服务器响应格式错误' }));
+  if (res.status === 401) { location.reload(); throw new Error('DSM 登录已失效'); }
+  if (!res.ok || !json.ok) throw new Error(json.error || '操作失败');
+  return json;
+}
+
+function siteById(id) { return state.sites.find(s => s.id === id) || null; }
+function siteLabel(id) { const s = siteById(id); return s ? s.name : '（已删除）'; }
+function kindTag(kind) {
+  if (kind === 'local') return '<span class="tag local">本机</span>';
+  if (kind === 'openwrt') return '<span class="tag openwrt">OpenWrt</span>';
+  return '<span class="tag linux">Linux</span>';
+}
+function modeText(mode) {
+  return mode === 'a2b' ? 'A → B 单向' : mode === 'b2a' ? 'B → A 单向' : '双向';
+}
+function deleteText(p) {
+  return p === 'purge' ? '直接删除' : p === 'keep' ? '不跟随' : '回收站';
+}
+
+// ---------------------------------------------------------------------------
+// 目录选择器：本机直接读盘，远端走 SSH 只列直接子目录
+// ---------------------------------------------------------------------------
+let dirPickCtx = null;   // { siteId, onPick }
+let dirCurrent = '/';
+
+function openDirPicker(siteId, startPath, onPick) {
+  if (!siteId) { notice('请先选择站点，再选目录', 'error'); return; }
+  const site = siteById(siteId);
+  dirPickCtx = { siteId: siteId, onPick: onPick };
+  dirCurrent = (startPath || '').trim() || '/';
+  $('dirModalTitle').textContent = '选择目录 · ' + (site ? site.name : '');
+  $('dirModal').classList.add('open');
+  browseDir(dirCurrent, true);
+}
+
+function closeDirPicker() {
+  $('dirModal').classList.remove('open');
+  dirPickCtx = null;
+}
+
+async function browseDir(path, fallbackToRoot) {
+  if (!dirPickCtx) return;
+  const target = (path || '').trim() || '/';
+  $('dirPath').value = target;
+  $('dirList').innerHTML = '<div class="empty">读取中…</div>';
+  $('dirHint').textContent = '正在读取 ' + target;
+  try {
+    const d = await api('browse', { site_id: dirPickCtx.siteId, path: target });
+    dirCurrent = d.path;
+    renderDirList(d);
+  } catch (e) {
+    // 原来填的目录不存在时，退回到根目录，别让用户对着报错发呆
+    if (fallbackToRoot && target !== '/') { await browseDir('/', false); return; }
+    dirCurrent = target;
+    renderCrumbs(target);
+    $('dirUpBtn').disabled = (target === '/');
+    $('dirList').innerHTML = '<div class="empty">' + esc(e.message) + '</div>';
+    $('dirHint').textContent = '读取失败。可以直接在地址栏输入完整路径后回车，或先回到 / 再逐级进入。';
+  }
+}
+
+function renderDirList(d) {
+  $('dirPath').value = d.path;
+  $('dirUpBtn').disabled = (d.path === '/');
+  renderCrumbs(d.path);
+  const box = $('dirList');
+  box.replaceChildren();
+  if (!d.dirs || !d.dirs.length) {
+    box.innerHTML = '<div class="empty">这个目录下没有子目录，可以直接选它。</div>';
+  } else {
+    for (const item of d.dirs) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'drow';
+      btn.innerHTML = '<span class="ic"></span><span>' + esc(item.name) + '</span>';
+      btn.addEventListener('click', () => browseDir(item.path, false));
+      box.append(btn);
+    }
+  }
+  $('dirHint').textContent = d.truncated
+    ? '目录太多，只显示前 500 个。可以直接在地址栏输入完整路径。'
+    : '点目录名进入下一级，也可以在地址栏直接输入完整路径后回车。';
+}
+
+function renderCrumbs(path) {
+  const box = $('dirCrumbs');
+  box.replaceChildren();
+  const root = document.createElement('button');
+  root.type = 'button';
+  root.textContent = '/';
+  root.addEventListener('click', () => browseDir('/', false));
+  box.append(root);
+  const parts = String(path || '/').split('/').filter(Boolean);
+  let acc = '';
+  parts.forEach((part, i) => {
+    acc += '/' + part;
+    const sep = document.createElement('span');
+    sep.className = 'sep';
+    sep.textContent = '›';
+    box.append(sep);
+    if (i === parts.length - 1) {
+      const cur = document.createElement('span');
+      cur.className = 'cur';
+      cur.textContent = part;
+      box.append(cur);
+    } else {
+      const target = acc;
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.textContent = part;
+      btn.addEventListener('click', () => browseDir(target, false));
+      box.append(btn);
+    }
+  });
+}
+
+function parentOfPath(path) {
+  const parts = String(path || '/').split('/').filter(Boolean);
+  parts.pop();
+  return parts.length ? '/' + parts.join('/') : '/';
+}
+
+function confirmDirPick() {
+  if (!dirPickCtx) return;
+  const pick = dirPickCtx.onPick;
+  const path = dirCurrent;
+  closeDirPicker();
+  if (pick) pick(path);
+}
+
+function renderSites() {
+  const grid = $('siteGrid');
+  grid.replaceChildren();
+  for (const s of state.sites) {
+    const el = document.createElement('div');
+    el.className = 'site' + (s.kind === 'local' ? ' local' : '');
+    const dot = s.kind === 'local' ? 'ok' : (s.last_check ? (s.last_ok ? 'ok' : 'bad') : 'unknown');
+    const where = s.kind === 'local' ? '本机路径' : (s.ssh_user + '@' + s.host + ':' + s.port);
+    let caps = '';
+    // 只在最近一次探测成功时才展示能力徽章，避免"连接超时"旁边还挂着 rsync 版本
+    if (s.kind !== 'local' && s.last_ok) {
+      try {
+        const c = JSON.parse(s.caps_json || '{}');
+        if (c.has_rsync) caps = 'rsync 增量传输';
+        else if (c.os) caps = '无 rsync · tar 传输';
+      } catch (e) {}
+    }
+    el.innerHTML =
+      '<h3><span class="dot ' + dot + '"></span>' + esc(s.name) + '</h3>' +
+      '<div class="meta">' + kindTag(s.kind) + (caps ? ' <span class="badge">' + esc(caps) + '</span>' : '') + '<br>' +
+      esc(where) + (s.note ? '<br>' + esc(s.note) : '') +
+      (s.last_check_msg ? '<br><span class="muted">' + esc(s.last_check_msg) + '</span>' : '') + '</div>' +
+      '<div class="ops">' + (s.kind === 'local' ? '' :
+        '<button class="secondary" data-act="test">测试连接</button>' +
+        '<button class="secondary" data-act="edit">编辑</button>' +
+        '<button class="danger" data-act="del">删除</button>') + '</div>';
+    el.querySelectorAll('button[data-act]').forEach(btn => {
+      btn.addEventListener('click', () => siteAction(btn.dataset.act, s));
+    });
+    grid.append(el);
+  }
+  const total = state.rules.length;
+  const ok = state.rules.filter(r => r.last_status === 'ok').length;
+  const bad = state.rules.filter(r => r.last_status === 'error').length;
+  $('statRow').innerHTML =
+    '<div class="stat"><b>' + total + '</b><span>同步规则</span></div>' +
+    '<div class="stat"><b>' + ok + '</b><span>上次成功</span></div>' +
+    '<div class="stat"><b>' + bad + '</b><span>上次失败</span></div>' +
+    '<div class="stat"><b>' + (state.sites.length - 1) + '</b><span>远端站点</span></div>';
+}
+
+function renderRuleSelects() {
+  const options = state.sites.map(s => '<option value="' + esc(s.id) + '">' + esc(s.name) + '</option>').join('');
+  for (const id of ['siteA', 'siteB']) {
+    const sel = $(id);
+    const keep = sel.value;
+    sel.innerHTML = options;
+    if (keep && state.sites.some(s => s.id === keep)) sel.value = keep;
+  }
+  // 只要用户没手动改过 B 端，就始终把 B 指向一个和 A 不同的站点，
+  // 避免"两个下拉都是本机"导致用户以为不能跨站同步。
+  if (!userPickedB) {
+    const a = $('siteA').value;
+    if ($('siteB').value === a) {
+      const other = state.sites.find(s => s.id !== a);
+      if (other) $('siteB').value = other.id;
+    }
+  }
+  // 规则表单的说明随站点数量变化
+  const desc = $('ruleFormDesc');
+  if (desc) {
+    if (state.sites.length < 2) {
+      desc.innerHTML = '还没有添加其他站点。请先在上方「站点」里添加 OpenWrt 或 Linux 站点，再回来建规则。';
+    } else {
+      desc.innerHTML = '适合<strong>两个站</strong>互备，或做单向备份（A→B、B→A）。'
+        + '三个站以上请用下面的「多站互备」——两两配规则会让同一个文件来回覆盖好几轮。';
+    }
+  }
+}
+
+function renderRules() {
+  const box = $('ruleList');
+  box.replaceChildren();
+  if (!state.rules.length) { box.innerHTML = '<span class="muted">还没有同步规则。先添加站点，再在上方新建一条规则。</span>'; return; }
+  for (const r of state.rules) {
+    const el = document.createElement('div');
+    el.className = 'rule';
+    const statusBadge = r.last_status === 'ok' ? '<span class="badge ok">正常</span>'
+      : r.last_status === 'error' ? '<span class="badge err">失败</span>'
+      : r.last_status === 'running' ? '<span class="badge run">同步中</span>' : '<span class="badge off">等待首轮</span>';
+    const next = r.next_run ? fmtTime(r.next_run) : '未排期';
+    const arrow = r.mode === 'a2b' ? '→' : r.mode === 'b2a' ? '←' : '⇄';
+    el.innerHTML =
+      '<div><h3>' + esc(r.name) + statusBadge + (r.enabled ? '' : '<span class="badge off">已停用</span>') + '</h3>' +
+      '<div class="meta">' + esc(siteLabel(r.site_a)) + ' <code>' + esc(r.dir_a) + '</code> ' + arrow + ' ' +
+      esc(siteLabel(r.site_b)) + ' <code>' + esc(r.dir_b) + '</code><br>' +
+      esc(modeText(r.mode)) + ' · 删除：' + esc(deleteText(r.delete_policy)) + ' · 每 ' + r.interval_min + ' 分钟<br>' +
+      '上次：' + fmtTime(r.last_run) + ' · ' + esc(r.last_message || '尚未执行') + '<br>' +
+      '下次：' + esc(next) + '</div></div>' +
+      '<div class="ops">' +
+      '<button data-act="run">立即同步</button>' +
+      '<button class="secondary" data-act="dry">预演</button>' +
+      '<button class="secondary" data-act="logs">日志</button>' +
+      '<button class="secondary" data-act="edit">编辑</button>' +
+      '<button class="secondary" data-act="toggle">' + (r.enabled ? '停用' : '启用') + '</button>' +
+      '<button class="danger" data-act="del">删除</button></div>';
+    el.querySelectorAll('button[data-act]').forEach(btn => {
+      btn.addEventListener('click', () => ruleAction(btn.dataset.act, r, btn));
+    });
+    box.append(el);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 多站互备
+// ---------------------------------------------------------------------------
+function renderGroupMembers() {
+  const box = $('gMemberList');
+  box.replaceChildren();
+  if (!groupMembers.length) {
+    box.innerHTML = '<span class="muted">还没有成员，点下面的按钮添加。</span>';
+    return;
+  }
+  groupMembers.forEach((member, idx) => {
+    const row = document.createElement('div');
+    row.className = 'member-row';
+    const options = state.sites.map(s =>
+      '<option value="' + esc(s.id) + '"' + (s.id === member.site_id ? ' selected' : '') + '>' +
+      esc(s.name) + '</option>').join('');
+    row.innerHTML = '<select class="m-site">' + options + '</select>' +
+      '<input class="m-dir" value="' + esc(member.dir || '') + '" placeholder="/volume1/photo 或 /mnt/data" spellcheck="false">' +
+      '<button class="secondary m-pick">选择目录</button>' +
+      '<button class="secondary m-del">移除</button>';
+    row.querySelector('.m-site').addEventListener('change', e => { groupMembers[idx].site_id = e.target.value; });
+    row.querySelector('.m-dir').addEventListener('input', e => { groupMembers[idx].dir = e.target.value; });
+    row.querySelector('.m-pick').addEventListener('click', () => {
+      const dirInput = row.querySelector('.m-dir');
+      openDirPicker(member.site_id, dirInput.value, path => {
+        groupMembers[idx].dir = path;
+        dirInput.value = path;
+      });
+    });
+    row.querySelector('.m-del').addEventListener('click', () => {
+      groupMembers.splice(idx, 1);
+      renderGroupMembers();
+    });
+    box.append(row);
+  });
+}
+
+function resetGroupForm() {
+  editingGroup = null;
+  $('groupFormTitle').textContent = '新建多站互备';
+  $('gSaveBtn').textContent = '保存同步组';
+  $('gCancelBtn').hidden = true;
+  $('gName').value = '';
+  $('gInterval').value = '10';
+  $('gDelete').value = 'trash';
+  $('gExcludes').value = '';
+  const local = state.sites.find(s => s.kind === 'local');
+  const others = state.sites.filter(s => s.kind !== 'local');
+  groupMembers = [];
+  if (local) groupMembers.push({ site_id: local.id, dir: '' });
+  others.slice(0, 2).forEach(s => groupMembers.push({ site_id: s.id, dir: '' }));
+  renderGroupMembers();
+}
+
+function editGroup(group) {
+  editingGroup = group.id;
+  $('groupFormTitle').textContent = '编辑多站互备';
+  $('gSaveBtn').textContent = '保存修改';
+  $('gCancelBtn').hidden = false;
+  $('gName').value = group.name || '';
+  $('gInterval').value = group.interval_min;
+  $('gDelete').value = group.delete_policy;
+  $('gExcludes').value = group.excludes || '';
+  groupMembers = (group.members || []).map(m => ({ site_id: m.site_id, dir: m.dir }));
+  renderGroupMembers();
+  $('groupFormCard').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+async function saveGroup() {
+  const members = groupMembers
+    .map(m => ({ site_id: m.site_id, dir: (m.dir || '').trim() }))
+    .filter(m => m.site_id && m.dir);
+  if (members.length < 2) return notice('至少需要 2 个填好目录的成员', 'error');
+  const hasLocal = members.some(m => {
+    const s = state.sites.find(x => x.id === m.site_id);
+    return s && s.kind === 'local';
+  });
+  if (!hasLocal) return notice('必须包含本机成员——本机负责中转，否则 A 站和 C 站之间传不了', 'error');
+  const payload = {
+    id: editingGroup,
+    name: $('gName').value.trim(),
+    interval_min: Number($('gInterval').value),
+    delete_policy: $('gDelete').value,
+    excludes: $('gExcludes').value,
+    members: members
+  };
+  if (!payload.name) return notice('请填写组名称', 'error');
+  const btn = $('gSaveBtn');
+  btn.disabled = true;
+  try {
+    await api('save_group', payload);
+    notice(editingGroup ? '同步组已更新。' : '同步组已保存，稍后开始第一轮。', 'good');
+    resetGroupForm();
+    await load();
+  } catch (e) {
+    notice(e.message, 'error');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function renderGroups() {
+  const box = $('groupList');
+  box.replaceChildren();
+  if (!state.groups.length) {
+    box.innerHTML = '<span class="muted">还没有同步组。三个站互通时，用上面的表单建一个组就够了，不需要配两条规则。</span>';
+    return;
+  }
+  for (const g of state.groups) {
+    const el = document.createElement('div');
+    el.className = 'rule';
+    const badge = g.last_status === 'ok' ? '<span class="badge ok">正常</span>'
+      : g.last_status === 'error' ? '<span class="badge err">失败</span>'
+      : g.last_status === 'running' ? '<span class="badge run">同步中</span>' : '<span class="badge off">等待首轮</span>';
+    const chips = g.members.map(m =>
+      '<span class="member-chip">' + esc(m.site_name) + ' <code>' + esc(m.dir) + '</code></span>').join('');
+    el.innerHTML =
+      '<div><h3>' + esc(g.name) + badge + (g.enabled ? '' : '<span class="badge off">已停用</span>') + '</h3>' +
+      '<div class="member-list">' + chips + '</div>' +
+      '<div class="meta" style="margin-top:6px">' + g.members.length + ' 个站点 · 每 ' + g.interval_min + ' 分钟 · 删除：' +
+      esc(deleteText(g.delete_policy)) + '<br>上次：' + fmtTime(g.last_run) + ' · ' + esc(g.last_message || '尚未执行') +
+      '<br>下次：' + esc(g.next_run ? fmtTime(g.next_run) : '未排期') + '</div></div>' +
+      '<div class="ops">' +
+      '<button data-act="run">立即同步</button>' +
+      '<button class="secondary" data-act="dry">预演</button>' +
+      '<button class="secondary" data-act="logs">日志</button>' +
+      '<button class="secondary" data-act="edit">编辑</button>' +
+      '<button class="secondary" data-act="toggle">' + (g.enabled ? '停用' : '启用') + '</button>' +
+      '<button class="danger" data-act="del">删除</button></div>';
+    el.querySelectorAll('button[data-act]').forEach(btn => {
+      btn.addEventListener('click', () => groupAction(btn.dataset.act, g, btn));
+    });
+    box.append(el);
+  }
+}
+
+async function groupAction(act, group, btn) {
+  try {
+    if (act === 'run') {
+      btn.disabled = true; btn.textContent = '排队中…';
+      await api('run_group', { id: group.id });
+      notice('已排入同步队列，调度器会在 20 秒内开始。');
+      setTimeout(load, 3000);
+    } else if (act === 'dry') {
+      btn.disabled = true; btn.textContent = '扫描中…';
+      const d = await api('test_group', { id: group.id });
+      const lines = d.members.map(m => '  ' + m.name + '（' + m.dir + '）：' + m.files + ' 个文件').join('\n');
+      const wins = Object.keys(d.winners || {}).map(k => '  ' + k + ' 最新：' + d.winners[k] + ' 个').join('\n');
+      alert('预演结果（未传输任何文件）\n\n' + lines +
+        '\n\n将更新：' + d.update + ' 个文件' + (wins ? '\n' + wins : '') +
+        '\n将删除：' + d.delete + '\n冲突：' + d.conflicts + '\n已一致：' + d.same);
+    } else if (act === 'logs') {
+      $('logTitle').textContent = '同步日志 · ' + group.name;
+      $('logBody').textContent = '加载中…';
+      $('logModal').classList.add('open');
+      const d = await api('logs', { id: 'group:' + group.id });
+      $('logBody').innerHTML = (d.runs || []).map(r =>
+        '<div><span class="' + (r.status === 'error' ? 'e' : r.status === 'ok' ? 'g' : '') + '">[' + esc(r.started) + '] ' +
+        esc(r.status === 'ok' ? '成功' : r.status === 'error' ? '失败' : '进行中') + ' ' + esc(r.message) + '</span></div>'
+      ).join('') || '暂无记录';
+    } else if (act === 'edit') {
+      editGroup(group);
+    } else if (act === 'toggle') {
+      await api('toggle_group', { id: group.id, enabled: !group.enabled });
+      await load();
+    } else if (act === 'del') {
+      if (!confirm('删除同步组「' + group.name + '」？已同步的文件不会被删除，只是不再自动同步。')) return;
+      await api('delete_group', { id: group.id });
+      notice('同步组已删除。');
+      await load();
+    }
+  } catch (e) {
+    notice(e.message, 'error');
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = btn.textContent.replace('排队中…', '立即同步').replace('扫描中…', '预演');
+    }
+  }
+}
+
+async function load() {
+  try {
+    const data = await api('bootstrap');
+    state.sites = data.sites || [];
+    state.rules = data.rules || [];
+    state.groups = data.groups || [];
+    state.keys = data.keys || [];
+    state.settings = data.settings || {};
+    $('verTag').textContent = 'v' + (data.version || '');
+    const paused = state.settings.worker_paused === '1';
+    $('workerBadge').textContent = paused ? '调度已暂停' : '调度运行中';
+    $('workerBadge').className = 'badge ' + (paused ? 'off' : 'ok');
+    $('pauseBtn').textContent = paused ? '恢复调度' : '暂停调度';
+    $('trashDays').value = state.settings.trash_days || '30';
+    $('conflictCopy').value = state.settings.conflict_copy === '0' ? '0' : '1';
+    renderSites(); renderRuleSelects(); renderRules(); renderGroups();
+    if (!groupMembers.length) resetGroupForm();
+  } catch (e) { notice(e.message, 'error'); }
+}
+
+async function ruleAction(act, rule, btn) {
+  try {
+    if (act === 'run') {
+      btn.disabled = true; btn.textContent = '排队中…';
+      await api('run_rule', { id: rule.id });
+      notice('已排入同步队列，调度器会在 20 秒内开始。');
+      setTimeout(load, 3000);
+    } else if (act === 'dry') {
+      btn.disabled = true; btn.textContent = '扫描中…';
+      const d = await api('test_rule', { id: rule.id });
+      alert('预演结果（未传输任何文件）\n\nA 端文件：' + d.a_files + '\nB 端文件：' + d.b_files +
+        '\n将 A→B：' + d.a2b + '\n将 B→A：' + d.b2a + '\n将删除：' + d.del +
+        '\n冲突：' + d.conflicts + '\n已一致：' + d.same);
+    } else if (act === 'logs') {
+      $('logTitle').textContent = '同步日志 · ' + rule.name;
+      $('logBody').textContent = '加载中…';
+      $('logModal').classList.add('open');
+      const d = await api('logs', { id: rule.id });
+      $('logBody').innerHTML = (d.runs || []).map(r =>
+        '<div><span class="' + (r.status === 'error' ? 'e' : r.status === 'ok' ? 'g' : '') + '">[' + esc(r.started) + '] ' +
+        esc(r.status === 'ok' ? '成功' : r.status === 'error' ? '失败' : '进行中') + ' ' + esc(r.message) + '</span></div>'
+      ).join('') || '暂无记录';
+    } else if (act === 'edit') {
+      editRule(rule);
+    } else if (act === 'toggle') {
+      await api('toggle_rule', { id: rule.id, enabled: !rule.enabled });
+      await load();
+    } else if (act === 'del') {
+      if (!confirm('删除规则「' + rule.name + '」？已同步的文件不会被删除，只是不再自动同步。')) return;
+      await api('delete_rule', { id: rule.id });
+      notice('规则已删除。');
+      await load();
+    }
+  } catch (e) { notice(e.message, 'error'); }
+  finally { if (btn) { btn.disabled = false; btn.textContent = btn.textContent.replace('排队中…','立即同步').replace('扫描中…','预演'); } }
+}
+
+function editRule(rule) {
+  editingRule = rule.id;
+  userPickedB = true;  // 编辑既有规则时，站点是用户定过的，不要自动纠正
+  $('ruleFormTitle').textContent = '编辑同步规则';
+  $('saveRuleBtn').textContent = '保存修改';
+  $('cancelEditBtn').hidden = false;
+  $('ruleName').value = rule.name || '';
+  $('siteA').value = rule.site_a;
+  $('dirA').value = rule.dir_a;
+  $('siteB').value = rule.site_b;
+  $('dirB').value = rule.dir_b;
+  $('ruleMode').value = rule.mode;
+  $('deletePolicy').value = rule.delete_policy;
+  $('intervalMin').value = rule.interval_min;
+  $('ruleExcludes').value = rule.excludes || '';
+  $('ruleFormCard').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+function resetRuleForm() {
+  editingRule = null;
+  userPickedB = false;
+  $('ruleFormTitle').textContent = '新建同步规则';
+  $('saveRuleBtn').textContent = '保存规则';
+  $('cancelEditBtn').hidden = true;
+  $('ruleName').value = ''; $('dirA').value = ''; $('dirB').value = '';
+  $('ruleMode').value = 'both'; $('deletePolicy').value = 'trash';
+  $('intervalMin').value = '10'; $('ruleExcludes').value = '';
+  const local = state.sites.find(s => s.kind === 'local');
+  const remote = state.sites.find(s => s.kind !== 'local');
+  if (local) $('siteA').value = local.id;
+  if (remote) $('siteB').value = remote.id;
+}
+
+async function saveRule() {
+  const payload = {
+    id: editingRule,
+    name: $('ruleName').value.trim(),
+    site_a: $('siteA').value,
+    dir_a: $('dirA').value.trim(),
+    site_b: $('siteB').value,
+    dir_b: $('dirB').value.trim(),
+    mode: $('ruleMode').value,
+    delete_policy: $('deletePolicy').value,
+    interval_min: Number($('intervalMin').value),
+    excludes: $('ruleExcludes').value
+  };
+  if (!payload.name) return notice('请填写规则名称', 'error');
+  if (payload.site_a === payload.site_b && payload.dir_a === payload.dir_b) return notice('两端不能是同一个目录', 'error');
+  if (!payload.dir_a.startsWith('/') || !payload.dir_b.startsWith('/')) return notice('目录必须是以 / 开头的绝对路径', 'error');
+  const btn = $('saveRuleBtn'); btn.disabled = true;
+  try {
+    await api('save_rule', payload);
+    notice(editingRule ? '规则已更新。' : '规则已保存，稍后开始第一轮同步。', 'good');
+    resetRuleForm(); await load();
+  } catch (e) { notice(e.message, 'error'); }
+  finally { btn.disabled = false; }
+}
+
+function fillKeySelect(selected) {
+  const sel = $('sKey');
+  // 远端站点必须有密钥，所以不再提供"不指定"这种无效选项
+  if (!state.keys.length) {
+    sel.innerHTML = '<option value="">（保存时自动生成）</option>';
+    return;
+  }
+  sel.innerHTML = state.keys.map(k => '<option value="' + esc(k.id) + '">' + esc(k.name) + '</option>').join('');
+  if (selected && state.keys.some(k => k.id === selected)) sel.value = selected;
+  else sel.value = state.keys[0].id;
+}
+
+function openSiteModal(site) {
+  editingSite = site ? site.id : null;
+  $('siteModalTitle').textContent = site ? '编辑站点' : '添加站点';
+  $('delSiteBtn').hidden = !site;
+  $('sName').value = site ? site.name : '';
+  $('sKind').value = site && site.kind !== 'local' ? site.kind : 'openwrt';
+  $('sHost').value = site ? site.host : '';
+  $('sPort').value = site ? site.port : 22;
+  $('sUser').value = site ? site.ssh_user : 'root';
+  $('sNote').value = site ? site.note : '';
+  fillKeySelect(site ? site.key_id : '');
+  $('siteModal').classList.add('open');
+}
+
+async function saveSite(silent) {
+  const payload = {
+    id: editingSite,
+    name: $('sName').value.trim(),
+    kind: $('sKind').value,
+    host: $('sHost').value.trim(),
+    port: Number($('sPort').value),
+    ssh_user: $('sUser').value.trim(),
+    key_id: $('sKey').value,
+    note: $('sNote').value.trim()
+  };
+  if (!payload.name) { notice('请填写站点名称', 'error'); return null; }
+  if (!payload.host) { notice('请填写站点地址', 'error'); return null; }
+  try {
+    const d = await api('save_site', payload);
+    editingSite = d.id;
+    if (!silent) {
+      $('siteModal').classList.remove('open');
+      notice('站点已保存。请点「测试连接」验证 SSH。', 'good');
+    }
+    await load();
+    return d.id;
+  } catch (e) {
+    notice(e.message, 'error');
+    return null;
+  }
+}
+
+async function siteAction(act, site) {
+  try {
+    if (act === 'edit') return openSiteModal(site);
+    if (act === 'test') {
+      notice('正在连接 ' + site.host + ' …');
+      const d = await api('test_site', { id: site.id });
+      notice('连接成功：' + d.summary, 'good');
+      await load();
+    }
+    if (act === 'del') {
+      if (!confirm('删除站点「' + site.name + '」？使用它的规则需要先删除。')) return;
+      await api('delete_site', { id: site.id });
+      notice('站点已删除。');
+      await load();
+    }
+  } catch (e) { notice(e.message, 'error'); }
+}
+
+function renderKeys() {
+  const box = $('keyList');
+  if (!state.keys.length) { box.innerHTML = '<span class="muted">还没有密钥。生成一个后，复制安装命令到目标站点执行即可。</span>'; return; }
+  box.innerHTML = state.keys.map(k => {
+    const cmd = installCommand(k.public_line);
+    return '<div class="site" style="margin-bottom:10px;max-width:none"><h3>' + esc(k.name) + '</h3>' +
+      '<div class="keybox" style="margin-top:8px">' + esc(k.public_line) + '</div>' +
+      '<div class="ops"><button data-cmd="' + esc(k.id) + '">复制安装命令</button>' +
+      '<button class="secondary" data-copy="' + esc(k.id) + '">复制公钥</button>' +
+      '<button class="danger" data-del="' + esc(k.id) + '">删除密钥</button></div>' +
+      '<details style="margin-top:10px"><summary style="cursor:pointer;font-size:13px;color:#1769aa">查看命令（在对方机器的终端粘贴执行）</summary>' +
+      '<div class="keybox" style="margin-top:8px;white-space:pre;overflow-x:auto;word-break:normal">' + esc(cmd) + '</div></details>' +
+      '</div>';
+  }).join('');
+  box.querySelectorAll('button[data-copy]').forEach(b => b.addEventListener('click', () => {
+    const k = state.keys.find(x => x.id === b.dataset.copy);
+    copyText(k.public_line).then(() => notice('公钥已复制。', 'good')).catch(() => notice('复制失败，请手动选中复制', 'error'));
+  }));
+  box.querySelectorAll('button[data-cmd]').forEach(b => b.addEventListener('click', () => {
+    const k = state.keys.find(x => x.id === b.dataset.cmd);
+    copyText(installCommand(k.public_line))
+      .then(() => notice('安装命令已复制，到对方机器的终端粘贴执行，看到 OK 就成功了。', 'good'))
+      .catch(() => notice('复制失败，请展开「查看命令」手动选中复制', 'error'));
+  }));
+  box.querySelectorAll('button[data-del]').forEach(b => b.addEventListener('click', async () => {
+    if (!confirm('删除这个密钥？使用它的站点将无法连接。')) return;
+    try { await api('delete_key', { id: b.dataset.del }); await load(); renderKeys(); notice('密钥已删除。'); }
+    catch (e) { notice(e.message, 'error'); }
+  }));
+}
+
+$('addSiteBtn').addEventListener('click', () => openSiteModal(null));
+$('closeSiteModal').addEventListener('click', () => $('siteModal').classList.remove('open'));
+$('saveSiteBtn').addEventListener('click', saveSite);
+$('delSiteBtn').addEventListener('click', () => { const s = siteById(editingSite); if (s) siteAction('del', s); });
+$('testSiteBtn').addEventListener('click', async () => {
+  if (!editingSite) {
+    // 未保存的站点先保存再测试
+    await saveSite();
+    return;
+  }
+  const s = siteById(editingSite);
+  if (s) siteAction('test', s);
+});
+$('keyBtn').addEventListener('click', () => { renderKeys(); $('keyModal').classList.add('open'); });
+$('closeKeyModal').addEventListener('click', () => $('keyModal').classList.remove('open'));
+$('genKeyBtn').addEventListener('click', async () => {
+  const name = $('keyName').value.trim() || '同步密钥';
+  try {
+    await api('gen_key', { name: name });
+    $('keyName').value = '';
+    await load(); renderKeys();
+    notice('密钥已生成，请把公钥复制到目标站点。', 'good');
+  } catch (e) { notice(e.message, 'error'); }
+});
+// 用户手动选过 B 端后就不再自动纠正；换 A 端时如果和 B 撞了，自动挑另一个站点
+$('siteB').addEventListener('change', () => { userPickedB = true; });
+$('siteA').addEventListener('change', () => {
+  if (!userPickedB && $('siteB').value === $('siteA').value) {
+    const other = state.sites.find(s => s.id !== $('siteA').value);
+    if (other) $('siteB').value = other.id;
+  }
+});
+$('saveRuleBtn').addEventListener('click', saveRule);
+$('gAddMember').addEventListener('click', () => {
+  const used = new Set(groupMembers.map(m => m.site_id));
+  const site = state.sites.find(s => !used.has(s.id)) || state.sites[0];
+  groupMembers.push({ site_id: site ? site.id : '', dir: '' });
+  renderGroupMembers();
+});
+$('gSaveBtn').addEventListener('click', saveGroup);
+$('gCancelBtn').addEventListener('click', resetGroupForm);
+$('cancelEditBtn').addEventListener('click', resetRuleForm);
+$('saveSettingsBtn').addEventListener('click', async () => {
+  try {
+    await api('save_settings', { trash_days: Number($('trashDays').value), conflict_copy: $('conflictCopy').value });
+    notice('设置已保存。', 'good');
+    await load();
+  } catch (e) { notice(e.message, 'error'); }
+});
+$('pauseBtn').addEventListener('click', async () => {
+  try {
+    const paused = state.settings.worker_paused === '1';
+    await api('save_settings', { worker_paused: paused ? '0' : '1' });
+    await load();
+    notice(paused ? '调度已恢复。' : '调度已暂停，正在运行的同步会继续完成。');
+  } catch (e) { notice(e.message, 'error'); }
+});
+$('refreshBtn').addEventListener('click', load);
+$('closeLogModal').addEventListener('click', () => $('logModal').classList.remove('open'));
+
+// 目录选择器
+$('closeDirModal').addEventListener('click', closeDirPicker);
+$('closeDirModal2').addEventListener('click', closeDirPicker);
+$('dirPickBtn').addEventListener('click', confirmDirPick);
+$('dirUpBtn').addEventListener('click', () => browseDir(parentOfPath(dirCurrent), false));
+$('dirGoBtn').addEventListener('click', () => browseDir($('dirPath').value, false));
+$('dirPath').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); browseDir($('dirPath').value, false); }
+});
+$('dirModal').addEventListener('click', e => { if (e.target === $('dirModal')) closeDirPicker(); });
+$('pickDirA').addEventListener('click', () => {
+  openDirPicker($('siteA').value, $('dirA').value, path => { $('dirA').value = path; });
+});
+$('pickDirB').addEventListener('click', () => {
+  openDirPicker($('siteB').value, $('dirB').value, path => { $('dirB').value = path; });
+});
+
+// 预览模式的假数据，仅用于本地打开页面时查看界面
+function previewApi(action, data) {
+  const now = new Date();
+  const iso = m => new Date(now.getTime() - m * 60000).toISOString();
+  const db = {
+    version: '0.2.2-0001',
+    settings: { trash_days: '30', conflict_copy: '1', worker_paused: '0' },
+    sites: [
+      { id: 'local', name: '本机 · DiskStation', kind: 'local', host: '', port: 22, ssh_user: '', key_id: '', note: '', last_check: iso(3), last_ok: 1, last_check_msg: '本机路径可直接访问', caps_json: '{}' },
+      { id: 'a', name: 'A 站 · 路由器', kind: 'openwrt', host: '192.168.1.1', port: 22, ssh_user: 'root', key_id: 'k1', note: 'OpenWrt 主路由', last_check: iso(12), last_ok: 1, last_check_msg: 'Linux 5.10 · rsync 3.2.7', caps_json: '{"has_rsync":true,"os":"Linux"}' },
+      { id: 'c', name: 'C 站 · 日本 VPS', kind: 'linux', host: 'jp.example.com', port: 22, ssh_user: 'root', key_id: 'k1', note: '东京机房', last_check: iso(45), last_ok: 0, last_check_msg: '连接超时（45 秒）', caps_json: '{"has_rsync":false,"os":"Linux"}' }
+    ],
+    keys: [{ id: 'k1', name: '同步专用', public_line: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleKeyForPreviewOnly filesync@dsm' }],
+    groups: [
+      { id: 'g1', name: '三站照片互备', delete_policy: 'trash', excludes: '', interval_min: 10, enabled: 1,
+        next_run: iso(-8), last_run: iso(6), last_status: 'ok',
+        last_message: '拉回 2，推送 4，删除 0，冲突 0',
+        members: [
+          { id: 'm1', site_id: 'local', dir: '/volume1/photo', site_name: '本机 · DiskStation', site_kind: 'local' },
+          { id: 'm2', site_id: 'a', dir: '/mnt/usb/photo', site_name: 'A 站 · 路由器', site_kind: 'openwrt' },
+          { id: 'm3', site_id: 'c', dir: '/var/www/photo', site_name: 'C 站 · 日本 VPS', site_kind: 'linux' }
+        ] }
+    ],
+    rules: [
+      { id: 'r1', name: '照片互备', site_a: 'local', dir_a: '/volume1/photo', site_b: 'a', dir_b: '/mnt/usb/photo', mode: 'both', delete_policy: 'trash', excludes: '', interval_min: 10, enabled: 1, next_run: iso(-6), last_run: iso(4), last_status: 'ok', last_message: 'A→B 3，B→A 1，删除 0，冲突 0' },
+      { id: 'r2', name: '网站文件回传', site_a: 'c', dir_a: '/var/www/site', site_b: 'local', dir_b: '/volume1/web/site', mode: 'b2a', delete_policy: 'trash', excludes: '*.log', interval_min: 30, enabled: 1, next_run: iso(-22), last_run: iso(31), last_status: 'error', last_message: '连接超时（45 秒）' },
+      { id: 'r3', name: '路由器配置备份', site_a: 'a', dir_a: '/etc/config', site_b: 'local', dir_b: '/volume1/backup/openwrt', mode: 'a2b', delete_policy: 'keep', excludes: '', interval_min: 60, enabled: 1, next_run: iso(-50), last_run: iso(63), last_status: 'ok', last_message: 'A→B 2，B→A 0，删除 0，冲突 0' }
+    ]
+  };
+  if (action === 'bootstrap') return Promise.resolve(db);
+  if (action === 'logs') return Promise.resolve({ ok: true, runs: [
+    { started: iso(4), status: 'ok', message: 'A→B 3，B→A 1，删除 0，冲突 0' },
+    { started: iso(14), status: 'ok', message: 'A→B 0，B→A 0，删除 2，冲突 0' },
+    { started: iso(24), status: 'error', message: 'rsync 推送失败：connection reset by peer' }
+  ] });
+  if (action === 'test_rule') return Promise.resolve({ ok: true, a_files: 1284, b_files: 1281, a2b: 3, b2a: 1, del: 0, conflicts: 0, same: 1280 });
+  if (action === 'test_group') return Promise.resolve({ ok: true,
+    members: [
+      { name: '本机 · DiskStation', dir: '/volume1/photo', files: 1284 },
+      { name: 'A 站 · 路由器', dir: '/mnt/usb/photo', files: 1281 },
+      { name: 'C 站 · 日本 VPS', dir: '/var/www/photo', files: 1280 }
+    ],
+    winners: { '本机 · DiskStation': 2, 'A 站 · 路由器': 1 },
+    update: 3, delete: 0, conflicts: 1, same: 1280, delete_sample: [] });
+  if (action === 'test_site') return Promise.resolve({ ok: true, summary: 'Linux 5.10 · rsync 3.2.7' });
+  if (action === 'browse') {
+    const tree = {
+      '/': ['volume1', 'volume2', 'mnt', 'home', 'var'],
+      '/volume1': ['photo', 'video', 'web', 'backup'],
+      '/volume1/photo': ['2024', '2025', '手机相册'],
+      '/volume1/web': ['site', 'static'],
+      '/mnt': ['usb', 'data'],
+      '/mnt/usb': ['photo'],
+      '/mnt/usb/photo': ['2024', '2025'],
+      '/var': ['www', 'log'],
+      '/var/www': ['photo', 'site']
+    };
+    const p = (data && data.path) || '/';
+    const names = tree[p] || [];
+    const parent = p === '/' ? '/' : (p.replace(/\/[^/]+$/, '') || '/');
+    return Promise.resolve({ ok: true, path: p, parent: parent, truncated: false,
+      dirs: names.map(n => ({ name: n, path: p === '/' ? '/' + n : p + '/' + n })) });
+  }
+  return Promise.resolve({ ok: true });
+}
+
+load();
+setInterval(() => { if (!document.querySelector('.modal.open')) load(); }, 20000);
+</script></body></html>

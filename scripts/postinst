@@ -1,0 +1,20 @@
+#!/bin/sh
+# Copyright (c) 2026 AWA <https://www.akkdiy.cn>. All rights reserved.
+# 安装后：把套件服务账号加入 administrators 组，使其能读取 DSM 共享文件夹。
+# 文件同步必须能遍历用户数据，这是本套件能工作的前提。
+set -u
+
+PKG_USER="filesync"
+
+if id "$PKG_USER" >/dev/null 2>&1; then
+    synogroup --memberadd administrators "$PKG_USER" >/dev/null 2>&1 || true
+fi
+
+# 预建运行目录，保证权限正确
+mkdir -p "/var/packages/FileSync/var"
+chmod 0700 "/var/packages/FileSync/var"
+if id "$PKG_USER" >/dev/null 2>&1; then
+    chown "$PKG_USER:$PKG_USER" "/var/packages/FileSync/var" 2>/dev/null || true
+fi
+
+exit 0

@@ -1,0 +1,8 @@
+# No exact Python package dependency: DSM package names may be Python3.9,
+# Python3.10, or another Python3.x runtime. The package detects an installed
+# Python3.x runtime when it starts.
+#
+# FileSync 依赖的系统组件（DSM 7 自带，无需额外安装）：
+#   /usr/bin/ssh       OpenSSH 客户端，用于连接其他站点
+#   /usr/bin/rsync     rsync 3.x，用于增量传输（缺失时自动降级为 tar 流）
+#   /usr/bin/ssh-keygen 生成同步专用密钥

@@ -1,0 +1,21 @@
+{
+  "defaults": {
+    "run-as": "package"
+  },
+  "username": "filesync",
+  "groupname": "filesync",
+  "tool": [
+    {
+      "relpath": "ui/index.cgi",
+      "user": "package",
+      "group": "package",
+      "permission": "4755"
+    },
+    {
+      "relpath": "ui/api.cgi",
+      "user": "package",
+      "group": "package",
+      "permission": "4755"
+    }
+  ]
+}

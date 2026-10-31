@@ -1,0 +1,91 @@
+#!/bin/sh
+# Copyright (c) 2026 AWA <https://www.akkdiy.cn>. All rights reserved.
+# FileSync - 多站文件同步套件 启动脚本
+set -eu
+
+PKG="FileSync"
+PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+export PATH
+BASE="/var/packages/${PKG}"
+VAR="${BASE}/var"
+PIDFILE="${VAR}/worker.pid"
+LOGFILE="${VAR}/worker.log"
+APP="${BASE}/target/share/worker.py"
+
+PYTHON=""
+for candidate in \
+    /var/packages/Python3*/target/usr/local/bin/python3.[0-9]* \
+    /var/packages/Python3*/target/usr/bin/python3.[0-9]* \
+    /var/packages/Python3*/target/usr/local/bin/python3 \
+    /var/packages/Python3*/target/usr/bin/python3; do
+    [ -x "$candidate" ] || continue
+    PYTHON="$candidate"
+    break
+done
+if [ -z "$PYTHON" ]; then
+    for candidate in \
+        /var/packages/Python3/target/usr/local/bin/python3 \
+        /var/packages/Python3/target/usr/bin/python3 \
+        /usr/local/bin/python3 \
+        /usr/bin/python3; do
+        if [ -x "$candidate" ]; then PYTHON="$candidate"; break; fi
+    done
+fi
+
+running() {
+    [ -f "$PIDFILE" ] || return 1
+    pid="$(cat "$PIDFILE" 2>/dev/null || true)"
+    case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+    kill -0 "$pid" 2>/dev/null || return 1
+    [ -r "/proc/$pid/cmdline" ] || return 1
+    tr '\000' ' ' < "/proc/$pid/cmdline" | grep -F "${APP}" >/dev/null 2>&1
+}
+
+start_worker() {
+    [ -n "$PYTHON" ] || { echo "Python 3 is required" >&2; exit 1; }
+    [ -f "$APP" ] || { echo "Worker is missing" >&2; exit 1; }
+    if running; then return 0; fi
+    mkdir -p "$VAR"
+    chmod 0700 "$VAR"
+    touch "$LOGFILE"
+    chmod 0600 "$LOGFILE"
+    "$PYTHON" "$APP" >> "$LOGFILE" 2>&1 &
+    tries=0
+    while [ "$tries" -lt 30 ]; do
+        running && return 0
+        sleep 1
+        tries=$((tries + 1))
+    done
+    echo "Worker did not start; inspect $LOGFILE" >&2
+    return 1
+}
+
+case "${1:-}" in
+    start)
+        umask 077
+        start_worker
+        ;;
+    stop)
+        if running; then
+            pid="$(cat "$PIDFILE")"
+            kill "$pid" 2>/dev/null || true
+            tries=0
+            while kill -0 "$pid" 2>/dev/null && [ "$tries" -lt 20 ]; do
+                sleep 1
+                tries=$((tries + 1))
+            done
+            kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null || true
+        fi
+        rm -f "$PIDFILE"
+        ;;
+    status)
+        running && exit 0
+        exit 1
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|status}" >&2
+        exit 1
+        ;;
+esac
+
+exit 0

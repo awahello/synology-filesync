@@ -1,0 +1,678 @@
+#!/usr/bin/python3
+# Copyright (c) 2026 AWA <https://www.akkdiy.cn>. All rights reserved.
+"""FileSync 同步引擎。
+
+为什么不能直接用 rsync 双向 --delete
+------------------------------------
+`rsync --delete` 是单向的：它认为源是真理。双向各跑一次会互相删除对方的
+新文件——A 新增的文件还没传到 B，B 那轮"镜像 A"就把它删了。所以必须引入
+"上次同步基线"（baseline）做三向比较：
+
+    文件在 A、不在 B、基线里也没有  → A 新增，复制到 B
+    文件在 A、不在 B、基线里有      → B 删除了，跟随删除 A（或恢复 B）
+    两边都有但内容不同、只有一边变  → 把变化的一边推过去
+    两边都有但内容不同、两边都变了  → 冲突，mtime 较新的胜出
+
+这就是 Syncthing 一类工具的核心思路，"最新文件"的判定就落在冲突分支上。
+"""
+
+import json
+import os
+import time
+import uuid
+
+try:  # Windows 上没有 fcntl，仅影响本地调试，DSM 上始终可用
+    import fcntl
+except ImportError:  # pragma: no cover
+    fcntl = None
+
+import common
+import remote
+
+
+class RuleError(RuntimeError):
+    pass
+
+
+class GroupError(RuntimeError):
+    pass
+
+
+# --------------------------------------------------------------------------
+# 读取
+# --------------------------------------------------------------------------
+def load_site(db, site_id):
+    row = db.execute("SELECT * FROM sites WHERE id=?", (site_id,)).fetchone()
+    if not row:
+        raise RuleError("站点不存在或已被删除")
+    return dict(row)
+
+
+def load_rule(db, rule_id):
+    row = db.execute("SELECT * FROM rules WHERE id=?", (rule_id,)).fetchone()
+    if not row:
+        raise RuleError("同步规则不存在或已被删除")
+    return dict(row)
+
+
+def load_baseline(db, rule_id):
+    result = {}
+    for row in db.execute("SELECT rel,a_size,a_mtime,b_size,b_mtime FROM baseline WHERE rule_id=?", (rule_id,)):
+        result[row["rel"]] = (row["a_size"], row["a_mtime"], row["b_size"], row["b_mtime"])
+    return result
+
+
+# --------------------------------------------------------------------------
+# 决策（纯函数，便于单测）
+# --------------------------------------------------------------------------
+def decide(man_a, man_b, baseline, mode, delete_follow):
+    """三向合并决策。
+
+    参数
+    ----
+    man_a, man_b : {rel: (size, mtime)}
+    baseline     : {rel: (a_size, a_mtime, b_size, b_mtime)}  上次成功同步后的两端状态
+    mode         : both | a2b | b2a
+    delete_follow: 是否让删除传播
+
+    返回
+    ----
+    dict(a2b, b2a, del_a, del_b, conflicts, same)
+        a2b/b2a  需要传输的相对路径
+        del_a    需要从 A 侧删除（因为 B 侧删了）
+        del_b    需要从 B 侧删除（因为 A 侧删了）
+        conflicts [(rel, loser)] loser='a'/'b' 表示被覆盖的一侧，用于保留副本
+        same     两端已一致的文件数
+    """
+    plan = {"a2b": [], "b2a": [], "del_a": [], "del_b": [], "conflicts": [], "same": 0}
+
+    if mode == "a2b":
+        # A 是权威源，B 完全跟随 A
+        for rel, meta in man_a.items():
+            if rel not in man_b or man_b[rel] != meta:
+                plan["a2b"].append(rel)
+            else:
+                plan["same"] += 1
+        if delete_follow:
+            for rel in man_b:
+                if rel not in man_a:
+                    plan["del_b"].append(rel)
+        return plan
+
+    if mode == "b2a":
+        for rel, meta in man_b.items():
+            if rel not in man_a or man_a[rel] != meta:
+                plan["b2a"].append(rel)
+            else:
+                plan["same"] += 1
+        if delete_follow:
+            for rel in man_a:
+                if rel not in man_b:
+                    plan["del_a"].append(rel)
+        return plan
+
+    # mode == 'both'：双向对等，三向合并
+    all_rels = set(man_a) | set(man_b) | set(baseline)
+    for rel in all_rels:
+        a = man_a.get(rel)
+        b = man_b.get(rel)
+        base = baseline.get(rel)
+
+        if not a and not b:
+            continue
+
+        if a and b:
+            if a == b:
+                plan["same"] += 1
+                continue
+            a_changed = base is None or (a[0], a[1]) != (base[0], base[1])
+            b_changed = base is None or (b[0], b[1]) != (base[2], base[3])
+            if a_changed and b_changed:
+                # 冲突：修改时间较新的胜出（这正是"最新文件"的判定）
+                if b[1] > a[1]:
+                    plan["b2a"].append(rel)
+                    plan["conflicts"].append((rel, "a"))
+                else:
+                    plan["a2b"].append(rel)
+                    plan["conflicts"].append((rel, "b"))
+            elif a_changed:
+                plan["a2b"].append(rel)
+            else:
+                plan["b2a"].append(rel)
+            continue
+
+        if a and not b:
+            if base is None:
+                plan["a2b"].append(rel)          # A 侧新增
+            elif delete_follow:
+                plan["del_a"].append(rel)        # B 侧删除，跟随
+            else:
+                plan["a2b"].append(rel)          # 不跟随删除，把文件推回 B
+            continue
+
+        if b and not a:
+            if base is None:
+                plan["b2a"].append(rel)          # B 侧新增
+            elif delete_follow:
+                plan["del_b"].append(rel)        # A 侧删除，跟随
+            else:
+                plan["b2a"].append(rel)
+    return plan
+
+
+# --------------------------------------------------------------------------
+# 执行
+# --------------------------------------------------------------------------
+def _acquire_lock(rule_id):
+    """同一规则不允许并发执行（调度与手动触发可能撞车）。"""
+    return _acquire_named_lock("rule-%s" % rule_id, "这条规则正在同步中，请稍后再试")
+
+
+def _acquire_named_lock(name, busy_message):
+    if fcntl is None:
+        return None
+    path = common.PKG_VAR / (name + ".lock")
+    fd = os.open(str(path), os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        os.close(fd)
+        raise RuleError(busy_message)
+    return fd
+
+
+def _release_lock(fd):
+    if fd is None or fcntl is None:
+        return
+    try:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
+
+def run_rule(db, rule_id, trigger="manual", log=None):
+    """执行一条同步规则。返回统计 dict。异常时抛 RuleError / RemoteError。"""
+    def emit(message, level="info"):
+        if log:
+            log(level, message)
+
+    lock_fd = _acquire_lock(rule_id)
+    started = common.now_iso()
+    cur = db.execute(
+        "INSERT INTO runs(rule_id,started,status,message) VALUES(?,?,'running',?)",
+        (rule_id, started, trigger),
+    )
+    run_id = cur.lastrowid
+    db.commit()
+
+    try:
+        rule = load_rule(db, rule_id)
+        site_a = load_site(db, rule["site_a"])
+        site_b = load_site(db, rule["site_b"])
+        settings = common.get_settings(db)
+        delete_follow = rule["delete_policy"] in ("trash", "purge")
+        patterns = remote.compile_excludes(rule["excludes"])
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+
+        emit("扫描 A 端（%s）：%s" % (site_a["name"], rule["dir_a"]))
+        man_a = remote.scan_side(site_a, rule["dir_a"])
+        emit("扫描 B 端（%s）：%s" % (site_b["name"], rule["dir_b"]))
+        man_b = remote.scan_side(site_b, rule["dir_b"])
+
+        man_a = remote.filter_manifest(man_a, patterns)
+        man_b = remote.filter_manifest(man_b, patterns)
+        emit("A 端 %d 个文件，B 端 %d 个文件" % (len(man_a), len(man_b)))
+
+        baseline = load_baseline(db, rule_id)
+        plan = decide(man_a, man_b, baseline, rule["mode"], delete_follow)
+        emit("计划：A→B %d 个，B→A %d 个，删除 %d 个，冲突 %d 个，已一致 %d 个" % (
+            len(plan["a2b"]), len(plan["b2a"]),
+            len(plan["del_a"]) + len(plan["del_b"]),
+            len(plan["conflicts"]), plan["same"]))
+
+        # 冲突覆盖前先保留败方副本，避免"最新优先"直接抹掉另一边的改动
+        if plan["conflicts"] and settings.get("conflict_copy") == "1":
+            for loser, site, directory in (
+                ("a", site_a, rule["dir_a"]),
+                ("b", site_b, rule["dir_b"]),
+            ):
+                files = [rel for rel, side in plan["conflicts"] if side == loser]
+                if files:
+                    moved = remote.trash_side(site, directory, files, "conflicts/" + stamp)
+                    emit("已保留 %d 个冲突副本（%s 侧）" % (moved, loser.upper()), "warn")
+
+        bytes_moved = 0
+        if plan["a2b"]:
+            bytes_moved += sum(man_a[rel][0] for rel in plan["a2b"] if rel in man_a)
+            emit("传输 A → B：%d 个文件，%s" % (
+                len(plan["a2b"]),
+                common.human_size(sum(man_a[rel][0] for rel in plan["a2b"] if rel in man_a))))
+            remote.transfer(site_a, rule["dir_a"], site_b, rule["dir_b"], plan["a2b"])
+
+        if plan["b2a"]:
+            bytes_moved += sum(man_b[rel][0] for rel in plan["b2a"] if rel in man_b)
+            emit("传输 B → A：%d 个文件，%s" % (
+                len(plan["b2a"]),
+                common.human_size(sum(man_b[rel][0] for rel in plan["b2a"] if rel in man_b))))
+            remote.transfer(site_b, rule["dir_b"], site_a, rule["dir_a"], plan["b2a"])
+
+        deleted = 0
+        if rule["delete_policy"] == "purge":
+            deleted += remote.purge_side(site_a, rule["dir_a"], plan["del_a"])
+            deleted += remote.purge_side(site_b, rule["dir_b"], plan["del_b"])
+        else:
+            if plan["del_a"]:
+                deleted += remote.trash_side(site_a, rule["dir_a"], plan["del_a"], stamp)
+            if plan["del_b"]:
+                deleted += remote.trash_side(site_b, rule["dir_b"], plan["del_b"], stamp)
+        if deleted:
+            emit("跟随删除 %d 个文件（%s）" % (
+                deleted, "直接删除" if rule["delete_policy"] == "purge" else "已移入回收站"))
+
+        # 以同步后的真实状态重建基线，rsync 部分失败时下次会自动重试
+        man_a_after = remote.filter_manifest(remote.scan_side(site_a, rule["dir_a"]), patterns)
+        man_b_after = remote.filter_manifest(remote.scan_side(site_b, rule["dir_b"]), patterns)
+        db.execute("DELETE FROM baseline WHERE rule_id=?", (rule_id,))
+        rows = []
+        for rel in set(man_a_after) & set(man_b_after):
+            a = man_a_after[rel]
+            b = man_b_after[rel]
+            rows.append((rule_id, rel, a[0], a[1], b[0], b[1]))
+        db.executemany(
+            "INSERT OR REPLACE INTO baseline(rule_id,rel,a_size,a_mtime,b_size,b_mtime) VALUES(?,?,?,?,?,?)",
+            rows,
+        )
+        db.commit()
+
+        leftover = len(set(man_a_after) ^ set(man_b_after))
+        if leftover:
+            emit("注意：同步后仍有 %d 个文件两端不一致，下轮会重试" % leftover, "warn")
+
+        # 回收站过期清理
+        keep_days = int(settings.get("trash_days") or 0)
+        if keep_days > 0:
+            remote.purge_trash(site_a, rule["dir_a"], keep_days)
+            remote.purge_trash(site_b, rule["dir_b"], keep_days)
+
+        stats = {
+            "up": len(plan["a2b"]),
+            "down": len(plan["b2a"]),
+            "deleted": deleted,
+            "bytes": bytes_moved,
+            "conflicts": len(plan["conflicts"]),
+            "leftover": leftover,
+        }
+        message = "A→B %d，B→A %d，删除 %d，冲突 %d" % (
+            stats["up"], stats["down"], stats["deleted"], stats["conflicts"])
+        db.execute(
+            "UPDATE runs SET finished=?,status='ok',up_count=?,down_count=?,del_count=?,bytes=?,message=? WHERE id=?",
+            (common.now_iso(), stats["up"], stats["down"], stats["deleted"], bytes_moved, message, run_id),
+        )
+        db.execute(
+            "UPDATE rules SET last_run=?,last_status='ok',last_message=? WHERE id=?",
+            (common.now_iso(), message, rule_id),
+        )
+        db.commit()
+        emit("完成：" + message, "good")
+        return stats
+
+    except Exception as exc:  # noqa: BLE001
+        detail = str(exc)[:500] or type(exc).__name__
+        db.execute("UPDATE runs SET finished=?,status='error',message=? WHERE id=?",
+                   (common.now_iso(), detail, run_id))
+        db.execute("UPDATE rules SET last_run=?,last_status='error',last_message=? WHERE id=?",
+                   (common.now_iso(), detail, rule_id))
+        db.commit()
+        emit("失败：" + detail, "error")
+        raise
+    finally:
+        _release_lock(lock_fd)
+
+
+def test_rule(db, rule_id, log=None):
+    """只做扫描和决策，不传输——用于"预演"按钮。"""
+    rule = load_rule(db, rule_id)
+    site_a = load_site(db, rule["site_a"])
+    site_b = load_site(db, rule["site_b"])
+    patterns = remote.compile_excludes(rule["excludes"])
+    man_a = remote.filter_manifest(remote.scan_side(site_a, rule["dir_a"]), patterns)
+    man_b = remote.filter_manifest(remote.scan_side(site_b, rule["dir_b"]), patterns)
+    baseline = load_baseline(db, rule_id)
+    plan = decide(man_a, man_b, baseline, rule["mode"], rule["delete_policy"] in ("trash", "purge"))
+    sample = {
+        "a2b": plan["a2b"][:20],
+        "b2a": plan["b2a"][:20],
+        "del_a": plan["del_a"][:20],
+        "del_b": plan["del_b"][:20],
+    }
+    return {
+        "a_files": len(man_a),
+        "b_files": len(man_b),
+        "a2b": len(plan["a2b"]),
+        "b2a": len(plan["b2a"]),
+        "del": len(plan["del_a"]) + len(plan["del_b"]),
+        "conflicts": len(plan["conflicts"]),
+        "same": plan["same"],
+        "sample": sample,
+    }
+
+
+# ==========================================================================
+# 多站互备（3 个以上站点，N 路合并）
+# ==========================================================================
+def load_group(db, group_id):
+    row = db.execute("SELECT * FROM groups WHERE id=?", (group_id,)).fetchone()
+    if not row:
+        raise GroupError("同步组不存在或已被删除")
+    return dict(row)
+
+
+def load_group_members(db, group_id):
+    members = []
+    for row in db.execute(
+        "SELECT * FROM group_members WHERE group_id=? ORDER BY position", (group_id,)
+    ):
+        member = dict(row)
+        member["site"] = load_site(db, row["site_id"])
+        members.append(member)
+    return members
+
+
+def load_group_baseline(db, group_id):
+    return {
+        row["rel"]: (row["size"], row["mtime"])
+        for row in db.execute("SELECT rel,size,mtime FROM group_baseline WHERE group_id=?", (group_id,))
+    }
+
+
+def decide_group(manifests, baseline, delete_follow):
+    """N 路合并决策。
+
+    参数
+    ----
+    manifests   : {member_id: {rel: (size, mtime)}}
+    baseline    : {rel: (size, mtime)}   上次同步后的权威版本
+    delete_follow: 是否让删除传播（多数决）
+
+    返回
+    ----
+    dict(
+        winners   = {rel: member_id},     该路径以谁为准
+        delete    = [rel],                需要从所有成员删除
+        conflicts = [(rel, member_id)],   落败方，覆盖前要留副本
+        same      = int,                  已完全一致的路径数
+    )
+
+    删除为什么用多数决
+    ------------------
+    三站里 A 误删一个文件，如果"任一删除即跟随"，B、C 会立刻跟着删——一次误操作
+    波及全部。改成多数决后：2 站删除才真的删，1 删 2 存则把文件推回去。两站时
+    1:1 属于平局，保守起见按"保留"处理。
+    """
+    member_ids = list(manifests.keys())
+    total = len(member_ids)
+    plan = {"winners": {}, "delete": [], "conflicts": [], "same": 0}
+
+    all_rels = set(baseline)
+    for manifest in manifests.values():
+        all_rels |= set(manifest)
+
+    for rel in all_rels:
+        present = {mid: manifests[mid][rel] for mid in member_ids if rel in manifests[mid]}
+
+        if not present:
+            continue  # 所有成员都没了，重建基线时自然消失
+
+        if len(present) == 1:
+            only_member, meta = next(iter(present.items()))
+            if rel not in baseline:
+                plan["winners"][rel] = only_member      # 某站新增
+                continue
+            missing = total - 1                          # 其余成员都删掉了它
+            if delete_follow and missing > 1:
+                plan["delete"].append(rel)               # 多数决通过，删除
+            else:
+                plan["winners"][rel] = only_member       # 平局或少数，推回去
+            continue
+
+        versions = set(present.values())
+        if len(versions) == 1:
+            # 内容一致；如果有成员缺失，仍要推给它
+            if len(present) == total:
+                plan["same"] += 1
+            else:
+                plan["winners"][rel] = next(iter(present))
+            continue
+
+        # 多版本并存：修改时间最新的胜出，这正是"最新文件"的判定
+        winner_id, winner_meta = max(present.items(), key=lambda kv: kv[1][1])
+        plan["winners"][rel] = winner_id
+        for mid, meta in present.items():
+            if mid != winner_id and meta != winner_meta:
+                plan["conflicts"].append((rel, mid))
+    return plan
+
+
+def run_group(db, group_id, trigger="manual", log=None):
+    """执行一次多站互备。
+
+    流程刻意分成三段，与用户的心智模型一致：
+        ① 把各路径的胜出版本先拉回本机
+        ② 再从本机推给其余成员
+        ③ 最后处理删除
+    这样本机始终是"中转站"，A 与 C 之间不需要直连。
+    """
+    def emit(message, level="info"):
+        if log:
+            log(level, message)
+
+    lock_fd = _acquire_named_lock("group-%s" % group_id, "这个同步组正在同步中，请稍后再试")
+    started = common.now_iso()
+    cur = db.execute(
+        "INSERT INTO runs(rule_id,started,status,message) VALUES(?,?,'running',?)",
+        ("group:" + group_id, started, trigger),
+    )
+    run_id = cur.lastrowid
+    db.commit()
+
+    try:
+        group = load_group(db, group_id)
+        members = load_group_members(db, group_id)
+        if len(members) < 2:
+            raise GroupError("同步组至少需要 2 个成员")
+        locals_ = [m for m in members if m["site"]["kind"] == "local"]
+        if not locals_:
+            raise GroupError("同步组必须包含本机成员（本机是中转站）")
+        local_member = locals_[0]
+        by_id = {m["id"]: m for m in members}
+
+        settings = common.get_settings(db)
+        delete_follow = group["delete_policy"] in ("trash", "purge")
+        patterns = remote.compile_excludes(group["excludes"])
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+
+        # ---------- 扫描 ----------
+        manifests = {}
+        for member in members:
+            manifest = remote.scan_side(member["site"], member["dir"])
+            manifest = remote.filter_manifest(manifest, patterns)
+            manifests[member["id"]] = manifest
+            emit("扫描 %s（%s）：%d 个文件" % (member["site"]["name"], member["dir"], len(manifest)))
+
+        baseline = load_group_baseline(db, group_id)
+        plan = decide_group(manifests, baseline, delete_follow)
+        emit("决策：%d 个文件需更新，%d 个待删除，%d 个冲突，%d 个已一致" % (
+            len(plan["winners"]), len(plan["delete"]), len(plan["conflicts"]), plan["same"]))
+
+        # ---------- 冲突副本 ----------
+        if plan["conflicts"] and settings.get("conflict_copy") == "1":
+            grouped = {}
+            for rel, mid in plan["conflicts"]:
+                grouped.setdefault(mid, []).append(rel)
+            for mid, files in grouped.items():
+                member = by_id[mid]
+                moved = remote.trash_side(member["site"], member["dir"], files, "conflicts/" + stamp)
+                emit("保留 %d 个冲突副本（%s 侧）" % (moved, member["site"]["name"]), "warn")
+
+        # ---------- 阶段一：胜出版本拉回本机 ----------
+        pull_by_source = {}
+        for rel, winner_id in plan["winners"].items():
+            if winner_id == local_member["id"]:
+                continue
+            local_meta = manifests[local_member["id"]].get(rel)
+            if local_meta == manifests[winner_id][rel]:
+                continue
+            pull_by_source.setdefault(winner_id, []).append(rel)
+
+        pulled = 0
+        bytes_moved = 0
+        for winner_id, files in pull_by_source.items():
+            source = by_id[winner_id]
+            size = sum(manifests[winner_id][rel][0] for rel in files)
+            emit("阶段一：从 %s 拉回 %d 个文件（%s）" % (
+                source["site"]["name"], len(files), common.human_size(size)))
+            remote.transfer(source["site"], source["dir"],
+                            local_member["site"], local_member["dir"], files)
+            pulled += len(files)
+            bytes_moved += size
+        if not pulled:
+            emit("阶段一：本机已是各文件的最新版本，无需拉取")
+
+        # ---------- 阶段二：从本机推给其余成员 ----------
+        pushed = 0
+        for member in members:
+            if member["id"] == local_member["id"]:
+                continue
+            need = []
+            for rel, winner_id in plan["winners"].items():
+                if rel in plan["delete"]:
+                    continue
+                target_meta = manifests[member["id"]].get(rel)
+                if target_meta != manifests[winner_id][rel]:
+                    need.append(rel)
+            if not need:
+                continue
+            size = sum(manifests[plan["winners"][rel]][rel][0] for rel in need)
+            emit("阶段二：推送 %d 个文件到 %s（%s）" % (
+                len(need), member["site"]["name"], common.human_size(size)))
+            remote.transfer(local_member["site"], local_member["dir"],
+                            member["site"], member["dir"], need)
+            pushed += len(need)
+            bytes_moved += size
+        if not pushed:
+            emit("阶段二：其余成员都已是最新，无需推送")
+
+        # ---------- 阶段三：删除 ----------
+        deleted = 0
+        for rel in plan["delete"]:
+            for member in members:
+                if rel not in manifests[member["id"]]:
+                    continue
+                if group["delete_policy"] == "purge":
+                    deleted += remote.purge_side(member["site"], member["dir"], [rel])
+                else:
+                    deleted += remote.trash_side(member["site"], member["dir"], [rel], stamp)
+        if deleted:
+            emit("阶段三：多数成员已删除，跟随删除 %d 个文件（%s）" % (
+                deleted, "直接删除" if group["delete_policy"] == "purge" else "已移入回收站"))
+
+        # ---------- 重建基线 ----------
+        after = {}
+        for member in members:
+            after[member["id"]] = remote.filter_manifest(
+                remote.scan_side(member["site"], member["dir"]), patterns)
+        rels = set()
+        for manifest in after.values():
+            rels |= set(manifest)
+
+        rows = []
+        leftover = 0
+        for rel in rels:
+            present = [after[mid][rel] for mid in after if rel in after[mid]]
+            if not present:
+                continue
+            counts = {}
+            for meta in present:
+                counts[meta] = counts.get(meta, 0) + 1
+            best = max(counts.items(), key=lambda kv: (kv[1], kv[0][1]))[0]
+            rows.append((group_id, rel, best[0], best[1]))
+            if len(counts) > 1:
+                leftover += 1
+
+        db.execute("DELETE FROM group_baseline WHERE group_id=?", (group_id,))
+        db.executemany(
+            "INSERT OR REPLACE INTO group_baseline(group_id,rel,size,mtime) VALUES(?,?,?,?)", rows)
+        db.commit()
+
+        if leftover:
+            emit("注意：仍有 %d 个文件在成员间不一致，下轮会重试" % leftover, "warn")
+
+        keep_days = int(settings.get("trash_days") or 0)
+        if keep_days > 0:
+            for member in members:
+                remote.purge_trash(member["site"], member["dir"], keep_days)
+
+        stats = {
+            "pulled": pulled,
+            "pushed": pushed,
+            "deleted": deleted,
+            "conflicts": len(plan["conflicts"]),
+            "bytes": bytes_moved,
+            "leftover": leftover,
+        }
+        message = "拉回 %d，推送 %d，删除 %d，冲突 %d" % (
+            pulled, pushed, deleted, len(plan["conflicts"]))
+        db.execute(
+            "UPDATE runs SET finished=?,status='ok',up_count=?,down_count=?,del_count=?,bytes=?,message=? WHERE id=?",
+            (common.now_iso(), pushed, pulled, deleted, bytes_moved, message, run_id),
+        )
+        db.execute("UPDATE groups SET last_run=?,last_status='ok',last_message=? WHERE id=?",
+                   (common.now_iso(), message, group_id))
+        db.commit()
+        emit("完成：" + message, "good")
+        return stats
+
+    except Exception as exc:  # noqa: BLE001
+        detail = str(exc)[:500] or type(exc).__name__
+        db.execute("UPDATE runs SET finished=?,status='error',message=? WHERE id=?",
+                   (common.now_iso(), detail, run_id))
+        db.execute("UPDATE groups SET last_run=?,last_status='error',last_message=? WHERE id=?",
+                   (common.now_iso(), detail, group_id))
+        db.commit()
+        emit("失败：" + detail, "error")
+        raise
+    finally:
+        _release_lock(lock_fd)
+
+
+def test_group(db, group_id):
+    """只扫描和决策，不传输。"""
+    group = load_group(db, group_id)
+    members = load_group_members(db, group_id)
+    if not members:
+        raise GroupError("同步组还没有成员")
+    patterns = remote.compile_excludes(group["excludes"])
+    manifests = {}
+    detail = []
+    for member in members:
+        manifest = remote.filter_manifest(remote.scan_side(member["site"], member["dir"]), patterns)
+        manifests[member["id"]] = manifest
+        detail.append({"name": member["site"]["name"], "dir": member["dir"], "files": len(manifest)})
+    baseline = load_group_baseline(db, group_id)
+    plan = decide_group(manifests, baseline, group["delete_policy"] in ("trash", "purge"))
+
+    by_id = {m["id"]: m["site"]["name"] for m in members}
+    winners = {}
+    for rel, mid in plan["winners"].items():
+        winners.setdefault(by_id[mid], 0)
+        winners[by_id[mid]] += 1
+
+    return {
+        "members": detail,
+        "winners": winners,
+        "update": len(plan["winners"]),
+        "delete": len(plan["delete"]),
+        "conflicts": len(plan["conflicts"]),
+        "same": plan["same"],
+        "delete_sample": plan["delete"][:10],
+    }
