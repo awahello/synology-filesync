@@ -27,6 +27,7 @@ except ImportError:  # pragma: no cover
     fcntl = None
 
 import common
+import archive
 import remote
 
 
@@ -75,6 +76,95 @@ def load_baseline(db, rule_id):
             row["b_size"], remote.norm_mtime(row["b_mtime"]),
         )
     return result
+
+
+# --------------------------------------------------------------------------
+# 压缩备份（把本机目录打成 tar.gz 放到另一个目录，按份数轮转）
+# --------------------------------------------------------------------------
+def local_dir_of_rule(db, rule):
+    """规则里属于本机的那一端目录；两端都不是本机时返回空。"""
+    for site_id, dir_key in ((rule["site_a"], "dir_a"), (rule["site_b"], "dir_b")):
+        site = load_site(db, site_id)
+        if site["kind"] == "local":
+            return rule[dir_key]
+    return ""
+
+
+def local_dir_of_group(db, group_id):
+    for member in load_group_members(db, group_id):
+        if member["site"]["kind"] == "local":
+            return member["dir"]
+    return ""
+
+
+def task_local_dir(db, table, owner_id):
+    if table == "rules":
+        return local_dir_of_rule(db, load_rule(db, owner_id))
+    return local_dir_of_group(db, owner_id)
+
+
+def run_backup(db, table, owner_id, force=False, log=None):
+    """按配置压缩备份本机目录。
+
+    force=False 时受 backup_interval_hour 约束（同步每轮都会调用它，只有到了
+    间隔才真的打包）；force=True 供界面上的「立即备份」使用。
+    返回 None 表示本轮不需要备份；失败抛 RuleError。
+    """
+    def emit(message, level="info"):
+        if log:
+            log(level, message)
+
+    if table not in ("rules", "groups"):
+        raise RuleError("备份目标不正确")
+    row = db.execute("SELECT * FROM %s WHERE id=?" % table, (owner_id,)).fetchone()
+    if not row:
+        raise RuleError("任务不存在或已被删除")
+    if not row["backup_enabled"] and not force:
+        return None
+    target = row["backup_dir"] or ""
+    if not target:
+        raise RuleError("还没有设置备份目录")
+    source = task_local_dir(db, table, owner_id)
+    if not source:
+        raise RuleError("这个任务没有本机目录，无法压缩备份")
+
+    if not force:
+        last = common.parse_iso(row["backup_last"])
+        hours = int(row["backup_interval_hour"] or 24)
+        if last and (common.now_local() - last).total_seconds() < hours * 3600:
+            return None
+
+    emit("压缩备份 %s → %s" % (source, target))
+    try:
+        info = archive.create_archive(source, target, row["backup_keep"] or 7,
+                                      remote.compile_excludes(row["excludes"]))
+    except archive.ArchiveError as exc:
+        message = "失败：" + str(exc)[:300]
+        db.execute("UPDATE %s SET backup_last=?,backup_msg=? WHERE id=?" % table,
+                   (common.now_iso(), message, owner_id))
+        db.commit()
+        emit("压缩备份失败：" + str(exc), "error")
+        raise RuleError("压缩备份失败：" + str(exc))
+
+    message = "成功：%s（%s，保留 %d 份%s）" % (
+        info["name"], common.human_size(info["size"]), info["keep"],
+        "，清理 %d 份旧包" % info["removed"] if info["removed"] else "")
+    db.execute("UPDATE %s SET backup_last=?,backup_msg=? WHERE id=?" % table,
+               (common.now_iso(), message, owner_id))
+    db.commit()
+    emit("压缩备份完成：" + message, "good")
+    return dict(info, message=message, source=source, target=target)
+
+
+def list_backups(db, table, owner_id):
+    """列出这个任务的已有备份包（最新在前）。"""
+    row = db.execute("SELECT * FROM %s WHERE id=?" % table, (owner_id,)).fetchone()
+    if not row:
+        raise RuleError("任务不存在或已被删除")
+    source = task_local_dir(db, table, owner_id)
+    if not source or not row["backup_dir"]:
+        return []
+    return archive.list_archives(source, row["backup_dir"])
 
 
 # --------------------------------------------------------------------------
@@ -332,6 +422,15 @@ def run_rule(db, rule_id, trigger="manual", log=None):
         if keep_days > 0:
             remote.purge_trash(site_a, rule["dir_a"], keep_days)
             remote.purge_trash(site_b, rule["dir_b"], keep_days)
+
+        # 压缩备份：同步完成后按间隔把本机目录打成 tar.gz，失败只记日志不中断
+        try:
+            info = run_backup(db, "rules", rule_id, log=emit)
+            if info:
+                detail.append("压缩备份 %s（%s，保留 %d 份）" % (
+                    info["name"], common.human_size(info["size"]), info["keep"]))
+        except RuleError as exc:
+            detail.append("压缩备份未完成：%s" % str(exc)[:200])
 
         stats = {
             "up": len(plan["a2b"]),
@@ -731,6 +830,15 @@ def run_group(db, group_id, trigger="manual", log=None):
         if keep_days > 0:
             for member in members:
                 remote.purge_trash(member["site"], member["dir"], keep_days)
+
+        # 压缩备份：只备份本机（中转站）目录，避免各站重复打包同一批文件
+        try:
+            info = run_backup(db, "groups", group_id, log=emit)
+            if info:
+                detail.append("压缩备份 %s（%s，保留 %d 份）" % (
+                    info["name"], common.human_size(info["size"]), info["keep"]))
+        except RuleError as exc:
+            detail.append("压缩备份未完成：%s" % str(exc)[:200])
 
         stats = {
             "pulled": pulled,

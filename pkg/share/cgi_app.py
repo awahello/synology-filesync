@@ -6,6 +6,7 @@ index.cgi  → cgi_app.py index  → 渲染 HTML 界面
 api.cgi    → cgi_app.py api    → 处理 JSON 请求
 """
 
+import datetime as dt
 import json
 import os
 import re
@@ -69,10 +70,55 @@ def rule_public(row):
         "site_b": row["site_b"], "dir_b": row["dir_b"],
         "mode": row["mode"], "delete_policy": row["delete_policy"],
         "excludes": row["excludes"], "interval_min": row["interval_min"],
+        "start_delay_min": row["start_delay_min"], "retry_min": row["retry_min"],
+        "backup_enabled": row["backup_enabled"], "backup_dir": row["backup_dir"],
+        "backup_keep": row["backup_keep"], "backup_interval_hour": row["backup_interval_hour"],
+        "backup_last": row["backup_last"], "backup_msg": row["backup_msg"],
         "enabled": row["enabled"], "next_run": row["next_run"],
         "last_run": row["last_run"], "last_status": row["last_status"],
         "last_message": row["last_message"],
     }
+
+
+# --------------------------------------------------------------------------
+# 排期与压缩备份的入参处理（规则与同步组共用）
+# --------------------------------------------------------------------------
+def int_field(req, key, default, low, high, label):
+    raw = req.get(key)
+    if raw is None or raw == "":
+        raw = default
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        raise ValueError(label + "不正确")
+    if not low <= value <= high:
+        raise ValueError("%s必须在 %d 到 %d 之间" % (label, low, high))
+    return value
+
+
+def next_run_iso(delay_minutes):
+    """首次运行延迟：保存后先等 N 分钟再跑第一轮，避开开机/安装高峰。"""
+    delay = max(0, int(delay_minutes or 0))
+    return (common.now_local() + dt.timedelta(minutes=delay)).isoformat(timespec="seconds")
+
+
+def backup_fields(req, local_dir, label="规则"):
+    """解析压缩备份的四个参数，并挡住「备份目录落在同步目录里」这种致命配置。"""
+    enabled = 1 if str(req.get("backup_enabled") or "0") in ("1", "true", "True") else 0
+    raw_dir = (req.get("backup_dir") or "").strip()
+    backup_dir = common.clean_abs_path(raw_dir) if raw_dir else ""
+    if raw_dir and not backup_dir:
+        raise ValueError("备份目录必须是以 / 开头的绝对路径，且不能包含 ..")
+    keep = int_field(req, "backup_keep", 7, 1, 999, "备份保留份数")
+    hours = int_field(req, "backup_interval_hour", 24, 1, 720, "备份间隔")
+    if enabled:
+        if not backup_dir:
+            raise ValueError("启用压缩备份需要填写备份目录")
+        if not local_dir:
+            raise ValueError("这条%s两端都不是本机，没有可打包的主机目录" % label)
+        if common.paths_overlap(local_dir, backup_dir):
+            raise ValueError("备份目录不能和本机同步目录重叠，否则备份包会被再次同步")
+    return enabled, backup_dir, keep, hours
 
 
 def worker_running():
@@ -354,25 +400,42 @@ def api_save_rule(db, req):
     if not isinstance(excludes, str) or len(excludes) > 8000 or any(ord(c) < 9 for c in excludes):
         raise ValueError("排除规则格式不正确")
 
+    start_delay = int_field(req, "start_delay_min", 0, 0, 10080, "首次运行延迟")
+    retry = int_field(req, "retry_min", 60, 0, 1440, "首轮失败重试间隔")
+
+    # 压缩备份只打本机那一端的目录：两端都是远端时没有"主机目录"可打包
+    local_dir = ""
+    for sid, directory in ((site_a, dir_a), (site_b, dir_b)):
+        site = db.execute("SELECT kind FROM sites WHERE id=?", (sid,)).fetchone()
+        if site and site["kind"] == "local":
+            local_dir = directory
+            break
+    backup_enabled, backup_dir, backup_keep, backup_hour = backup_fields(req, local_dir)
+    next_at = next_run_iso(start_delay)
+
     if rule_id:
         if not db.execute("SELECT 1 FROM rules WHERE id=?", (rule_id,)).fetchone():
             raise ValueError("规则不存在")
         db.execute(
             "UPDATE rules SET name=?,site_a=?,dir_a=?,site_b=?,dir_b=?,mode=?,delete_policy=?,"
-            "excludes=?,interval_min=?,next_run=? WHERE id=?",
+            "excludes=?,interval_min=?,start_delay_min=?,retry_min=?,backup_enabled=?,backup_dir=?,"
+            "backup_keep=?,backup_interval_hour=?,next_run=? WHERE id=?",
             (name, site_a, dir_a, site_b, dir_b, mode, delete_policy, excludes, interval,
-             common.now_iso(), rule_id),
+             start_delay, retry, backup_enabled, backup_dir, backup_keep, backup_hour,
+             next_at, rule_id),
         )
     else:
         rule_id = str(uuid.uuid4())
         db.execute(
             "INSERT INTO rules(id,name,site_a,dir_a,site_b,dir_b,mode,delete_policy,excludes,"
-            "interval_min,enabled,next_run,created) VALUES(?,?,?,?,?,?,?,?,?,?,1,?,?)",
+            "interval_min,start_delay_min,retry_min,backup_enabled,backup_dir,backup_keep,"
+            "backup_interval_hour,enabled,next_run,created) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?)",
             (rule_id, name, site_a, dir_a, site_b, dir_b, mode, delete_policy, excludes,
-             interval, common.now_iso(), common.now_iso()),
+             interval, start_delay, retry, backup_enabled, backup_dir, backup_keep, backup_hour,
+             next_at, common.now_iso()),
         )
     db.commit()
-    return {"ok": True, "id": rule_id}
+    return {"ok": True, "id": rule_id, "next_run": next_at}
 
 
 def api_delete_rule(db, req):
@@ -404,8 +467,10 @@ def api_toggle_rule(db, req):
         raise ValueError("规则编号不正确")
     if not isinstance(enabled, bool):
         raise ValueError("启用状态不正确")
+    row = db.execute("SELECT start_delay_min FROM rules WHERE id=?", (rule_id,)).fetchone()
+    delay = row["start_delay_min"] if row else 0
     db.execute("UPDATE rules SET enabled=?,next_run=? WHERE id=?",
-               (1 if enabled else 0, common.now_iso() if enabled else "", rule_id))
+               (1 if enabled else 0, next_run_iso(delay) if enabled else "", rule_id))
     db.commit()
     return {"ok": True}
 
@@ -437,7 +502,12 @@ def group_public(db, row):
     return {
         "id": row["id"], "name": row["name"],
         "delete_policy": row["delete_policy"], "excludes": row["excludes"],
-        "interval_min": row["interval_min"], "enabled": row["enabled"],
+        "interval_min": row["interval_min"],
+        "start_delay_min": row["start_delay_min"], "retry_min": row["retry_min"],
+        "backup_enabled": row["backup_enabled"], "backup_dir": row["backup_dir"],
+        "backup_keep": row["backup_keep"], "backup_interval_hour": row["backup_interval_hour"],
+        "backup_last": row["backup_last"], "backup_msg": row["backup_msg"],
+        "enabled": row["enabled"],
         "next_run": row["next_run"], "last_run": row["last_run"],
         "last_status": row["last_status"], "last_message": row["last_message"],
         "members": members,
@@ -471,6 +541,7 @@ def api_save_group(db, req):
     cleaned = []
     seen = set()
     has_local = False
+    local_dir = ""
     for item in raw_members:
         if not isinstance(item, dict):
             raise ValueError("成员格式不正确")
@@ -483,6 +554,7 @@ def api_save_group(db, req):
             raise ValueError("成员里包含不存在的站点")
         if site["kind"] == "local":
             has_local = True
+            local_dir = directory
         key = (site_id, directory)
         if key in seen:
             raise ValueError("同一个站点不能重复添加同一个目录")
@@ -492,20 +564,30 @@ def api_save_group(db, req):
     if not has_local:
         raise ValueError("同步组必须包含本机成员——本机负责中转，A 站与 C 站之间不需要直连")
 
+    start_delay = int_field(req, "start_delay_min", 0, 0, 10080, "首次运行延迟")
+    retry = int_field(req, "retry_min", 60, 0, 1440, "首轮失败重试间隔")
+    backup_enabled, backup_dir, backup_keep, backup_hour = backup_fields(req, local_dir, "同步组")
+    next_at = next_run_iso(start_delay)
+
     if group_id:
         if not db.execute("SELECT 1 FROM groups WHERE id=?", (group_id,)).fetchone():
             raise ValueError("同步组不存在")
         db.execute(
-            "UPDATE groups SET name=?,delete_policy=?,excludes=?,interval_min=?,next_run=? WHERE id=?",
-            (name, delete_policy, excludes, interval, common.now_iso(), group_id),
+            "UPDATE groups SET name=?,delete_policy=?,excludes=?,interval_min=?,start_delay_min=?,"
+            "retry_min=?,backup_enabled=?,backup_dir=?,backup_keep=?,backup_interval_hour=?,"
+            "next_run=? WHERE id=?",
+            (name, delete_policy, excludes, interval, start_delay, retry, backup_enabled,
+             backup_dir, backup_keep, backup_hour, next_at, group_id),
         )
         db.execute("DELETE FROM group_members WHERE group_id=?", (group_id,))
     else:
         group_id = str(uuid.uuid4())
         db.execute(
-            "INSERT INTO groups(id,name,delete_policy,excludes,interval_min,enabled,next_run,created)"
-            " VALUES(?,?,?,?,?,1,?,?)",
-            (group_id, name, delete_policy, excludes, interval, common.now_iso(), common.now_iso()),
+            "INSERT INTO groups(id,name,delete_policy,excludes,interval_min,start_delay_min,retry_min,"
+            "backup_enabled,backup_dir,backup_keep,backup_interval_hour,enabled,next_run,created)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?,1,?,?)",
+            (group_id, name, delete_policy, excludes, interval, start_delay, retry, backup_enabled,
+             backup_dir, backup_keep, backup_hour, next_at, common.now_iso()),
         )
     for position, (site_id, directory) in enumerate(cleaned):
         db.execute(
@@ -513,7 +595,7 @@ def api_save_group(db, req):
             (str(uuid.uuid4()), group_id, site_id, directory, position),
         )
     db.commit()
-    return {"ok": True, "id": group_id}
+    return {"ok": True, "id": group_id, "next_run": next_at}
 
 
 def api_delete_group(db, req):
@@ -546,8 +628,10 @@ def api_toggle_group(db, req):
         raise ValueError("同步组编号不正确")
     if not isinstance(enabled, bool):
         raise ValueError("启用状态不正确")
+    row = db.execute("SELECT start_delay_min FROM groups WHERE id=?", (group_id,)).fetchone()
+    delay = row["start_delay_min"] if row else 0
     db.execute("UPDATE groups SET enabled=?,next_run=? WHERE id=?",
-               (1 if enabled else 0, common.now_iso() if enabled else "", group_id))
+               (1 if enabled else 0, next_run_iso(delay) if enabled else "", group_id))
     db.commit()
     return {"ok": True}
 
@@ -560,6 +644,49 @@ def api_test_group(db, req):
         return dict(engine.test_group(db, group_id), ok=True)
     except (remote.RemoteError, engine.GroupError) as exc:
         raise ValueError("预演失败：" + str(exc))
+
+
+# --------------------------------------------------------------------------
+# POST：压缩备份
+# --------------------------------------------------------------------------
+BACKUP_TABLES = {"rule": "rules", "group": "groups"}
+
+
+def _backup_target(db, req):
+    kind = req.get("kind") or "rule"
+    table = BACKUP_TABLES.get(kind)
+    if not table:
+        raise ValueError("备份对象不正确")
+    owner_id = req.get("id")
+    if not isinstance(owner_id, str) or not re.fullmatch(r"[0-9a-f-]{36}", owner_id):
+        raise ValueError("编号不正确")
+    row = db.execute("SELECT id,name,backup_enabled,backup_dir FROM %s WHERE id=?" % table,
+                     (owner_id,)).fetchone()
+    if not row:
+        raise ValueError("任务不存在或已被删除")
+    return table, owner_id, row
+
+
+def api_run_backup(db, req):
+    """手动立刻打包一次，不受备份间隔限制。"""
+    table, owner_id, row = _backup_target(db, req)
+    if not row["backup_enabled"]:
+        raise ValueError("这个任务还没有启用压缩备份")
+    if not row["backup_dir"]:
+        raise ValueError("这个任务还没有设置备份目录")
+    info = engine.run_backup(db, table, owner_id, force=True)
+    return {"ok": True, "backup": info}
+
+
+def api_list_backups(db, req):
+    table, owner_id, row = _backup_target(db, req)
+    items = engine.list_backups(db, table, owner_id)
+    return {
+        "ok": True,
+        "backup_dir": row["backup_dir"],
+        "keep": db.execute("SELECT backup_keep FROM %s WHERE id=?" % table, (owner_id,)).fetchone()[0],
+        "backups": [dict(item, size_text=common.human_size(item["size"])) for item in items],
+    }
 
 
 # --------------------------------------------------------------------------
@@ -655,6 +782,8 @@ POST_HANDLERS = {
     "test_group": api_test_group,
     "browse": api_browse,
     "logs": api_logs,
+    "run_backup": api_run_backup,
+    "list_backups": api_list_backups,
     "clear_trash": api_clear_trash,
     "save_settings": api_save_settings,
 }

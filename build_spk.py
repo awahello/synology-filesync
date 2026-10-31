@@ -18,7 +18,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 PKG = ROOT / "pkg"
-VERSION = "0.3.7-0001"
+VERSION = "0.3.8-0001"
 OUT = ROOT.parent / ("多站文件同步-" + VERSION.split("-")[0] + ".spk")
 
 # package.tgz 内的条目（顺序即打包顺序）
@@ -27,6 +27,7 @@ PAYLOAD = [
     ("share/common.py", "f"),
     ("share/remote.py", "f"),
     ("share/engine.py", "f"),
+    ("share/archive.py", "f"),
     ("share/cgi_app.py", "f"),
     ("share/worker.py", "f"),
     ("share/ui_page.html", "f"),

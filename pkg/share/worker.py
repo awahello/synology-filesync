@@ -7,6 +7,12 @@
 单进程常驻，每 20 秒扫一次待执行规则。规则执行是同步阻塞的（一条跑完再跑
 下一条），因为文件同步本身是 IO/带宽密集型任务，并行只会互相拖慢并且让
 带宽统计失真。单条规则内部由 engine 的文件锁保证不会被重复进入。
+
+排期规则
+--------
+* 新建/保存时把 next_run 设为「现在 + 首次运行延迟」，让用户能避开开机高峰。
+* 跑完一轮：成功按执行间隔排下一轮；失败且从未成功过，按 retry_min 重试，
+  直到成功一次为止（首轮失败常见于公钥没装好、对方还没开机）。
 """
 
 import datetime as dt
@@ -43,6 +49,31 @@ def compute_next(minutes, base=None):
     base = base or common.now_local()
     minutes = max(1, int(minutes or 10))
     return (base + dt.timedelta(minutes=minutes)).isoformat(timespec="seconds")
+
+
+def next_run_after(db, kind, task_id, ok):
+    """算下一轮时间，返回 (iso, 说明)。
+
+    成功           → 按执行间隔
+    失败但从未成功 → 按 retry_min 重试，直到成功一次为止（首轮失败多半是网络或
+                     密钥还没准备好，隔一小时再试比等一整个间隔更合理）
+    失败且已成功过 → 按执行间隔，避免长期失败时每 20 秒猛冲
+    """
+    table = "rules" if kind == "rule" else "groups"
+    row = db.execute("SELECT interval_min,retry_min FROM %s WHERE id=?" % table, (task_id,)).fetchone()
+    interval = row["interval_min"] if row else 10
+    if ok or row is None:
+        return compute_next(interval), ""
+    retry = int(row["retry_min"] or 0)
+    if retry <= 0:
+        return compute_next(interval), ""
+    run_key = task_id if kind == "rule" else "group:" + task_id
+    ever_ok = db.execute(
+        "SELECT 1 FROM runs WHERE rule_id=? AND status='ok' LIMIT 1", (run_key,)
+    ).fetchone()
+    if ever_ok:
+        return compute_next(interval), ""
+    return compute_next(retry), "首轮未成功，%d 分钟后再试，直到成功一次为止" % retry
 
 
 def acquire_singleton():
@@ -107,6 +138,7 @@ def run_task(db, kind, row):
     label = "规则" if kind == "rule" else "同步组"
     log("开始%s「%s」（%s）" % (label, row["name"], task_id))
     started = time.time()
+    ok = False
     try:
         if kind == "rule":
             stats = engine.run_rule(db, task_id, trigger="schedule", log=lambda lv, m: log("  " + m))
@@ -118,18 +150,25 @@ def run_task(db, kind, row):
             log("%s「%s」完成，耗时 %.1f 秒：拉回 %d / 推送 %d / 删除 %d" % (
                 label, row["name"], time.time() - started,
                 stats["pulled"], stats["pushed"], stats["deleted"]))
+        ok = True
     except (engine.RuleError, engine.GroupError) as exc:
         log("%s「%s」跳过：%s" % (label, row["name"], exc))
     except Exception as exc:  # noqa: BLE001
         log("%s「%s」失败：%s" % (label, row["name"], exc))
         log(traceback.format_exc().replace("\n", " | ")[:800])
     finally:
-        # 无论成功失败都排下一轮，避免失败任务每 20 秒疯狂重试
+        # 无论成功失败都排下一轮，避免失败任务每 20 秒疯狂重试；
+        # 首轮失败时按 retry_min 重试，成功一次之后回到正常间隔。
         table = "rules" if kind == "rule" else "groups"
-        fresh = db.execute("SELECT interval_min FROM %s WHERE id=?" % table, (task_id,)).fetchone()
-        minutes = fresh["interval_min"] if fresh else 10
-        db.execute("UPDATE %s SET next_run=? WHERE id=?" % table, (compute_next(minutes), task_id))
+        try:
+            next_at, note = next_run_after(db, kind, task_id, ok)
+        except Exception as exc:  # noqa: BLE001
+            next_at, note = compute_next(10), ""
+            log("计算下一轮时间失败，按 10 分钟排期：%s" % exc)
+        db.execute("UPDATE %s SET next_run=? WHERE id=?" % table, (next_at, task_id))
         db.commit()
+        if note:
+            log("%s「%s」%s" % (label, row["name"], note))
 
 
 def main():

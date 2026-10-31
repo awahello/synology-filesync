@@ -39,7 +39,7 @@ CSRF_PATH = PKG_VAR / "csrf.key"
 PID_PATH = PKG_VAR / "worker.pid"
 LOG_PATH = PKG_VAR / "worker.log"
 
-APP_VERSION = "0.3.7-0001"
+APP_VERSION = "0.3.8-0001"
 AUTH_CGI = "/usr/syno/synoman/webman/modules/authenticate.cgi"
 AUTH_DIAGNOSTIC = "DSM 会话验证未完成。"
 MAX_BODY = 262144
@@ -99,6 +99,14 @@ CREATE TABLE IF NOT EXISTS rules (
     delete_policy TEXT NOT NULL DEFAULT 'trash',
     excludes      TEXT NOT NULL DEFAULT '',
     interval_min  INTEGER NOT NULL DEFAULT 10,
+    start_delay_min INTEGER NOT NULL DEFAULT 0,
+    retry_min     INTEGER NOT NULL DEFAULT 60,
+    backup_enabled INTEGER NOT NULL DEFAULT 0,
+    backup_dir    TEXT NOT NULL DEFAULT '',
+    backup_keep   INTEGER NOT NULL DEFAULT 7,
+    backup_interval_hour INTEGER NOT NULL DEFAULT 24,
+    backup_last   TEXT NOT NULL DEFAULT '',
+    backup_msg    TEXT NOT NULL DEFAULT '',
     enabled       INTEGER NOT NULL DEFAULT 1,
     next_run      TEXT NOT NULL DEFAULT '',
     last_run      TEXT NOT NULL DEFAULT '',
@@ -142,6 +150,14 @@ CREATE TABLE IF NOT EXISTS groups (
     delete_policy TEXT NOT NULL DEFAULT 'trash',
     excludes      TEXT NOT NULL DEFAULT '',
     interval_min  INTEGER NOT NULL DEFAULT 10,
+    start_delay_min INTEGER NOT NULL DEFAULT 0,
+    retry_min     INTEGER NOT NULL DEFAULT 60,
+    backup_enabled INTEGER NOT NULL DEFAULT 0,
+    backup_dir    TEXT NOT NULL DEFAULT '',
+    backup_keep   INTEGER NOT NULL DEFAULT 7,
+    backup_interval_hour INTEGER NOT NULL DEFAULT 24,
+    backup_last   TEXT NOT NULL DEFAULT '',
+    backup_msg    TEXT NOT NULL DEFAULT '',
     enabled       INTEGER NOT NULL DEFAULT 1,
     next_run      TEXT NOT NULL DEFAULT '',
     last_run      TEXT NOT NULL DEFAULT '',
@@ -179,6 +195,31 @@ DEFAULT_SETTINGS = {
     "worker_paused": "0",      # 全局暂停调度
 }
 
+# 0.3.8 新增列：老库（CREATE TABLE IF NOT EXISTS 不会补列）在这里补上，
+# 否则升级后 SELECT * 读不到新字段，保存规则会直接报错。
+MIGRATIONS = {
+    "rules": {
+        "start_delay_min": "INTEGER NOT NULL DEFAULT 0",
+        "retry_min": "INTEGER NOT NULL DEFAULT 60",
+        "backup_enabled": "INTEGER NOT NULL DEFAULT 0",
+        "backup_dir": "TEXT NOT NULL DEFAULT ''",
+        "backup_keep": "INTEGER NOT NULL DEFAULT 7",
+        "backup_interval_hour": "INTEGER NOT NULL DEFAULT 24",
+        "backup_last": "TEXT NOT NULL DEFAULT ''",
+        "backup_msg": "TEXT NOT NULL DEFAULT ''",
+    },
+    "groups": {
+        "start_delay_min": "INTEGER NOT NULL DEFAULT 0",
+        "retry_min": "INTEGER NOT NULL DEFAULT 60",
+        "backup_enabled": "INTEGER NOT NULL DEFAULT 0",
+        "backup_dir": "TEXT NOT NULL DEFAULT ''",
+        "backup_keep": "INTEGER NOT NULL DEFAULT 7",
+        "backup_interval_hour": "INTEGER NOT NULL DEFAULT 24",
+        "backup_last": "TEXT NOT NULL DEFAULT ''",
+        "backup_msg": "TEXT NOT NULL DEFAULT ''",
+    },
+}
+
 
 # --------------------------------------------------------------------------
 # 目录与数据库
@@ -198,9 +239,20 @@ def connect_db():
     db.execute("PRAGMA journal_mode=WAL")
     db.execute("PRAGMA busy_timeout=30000")
     db.executescript(SCHEMA)
+    ensure_columns(db)
     seed_local_site(db)
     seed_settings(db)
     return db
+
+
+def ensure_columns(db):
+    """给老库补新增的列。SQLite 的 ADD COLUMN 是常数时间操作，重复执行无害。"""
+    for table, columns in MIGRATIONS.items():
+        existing = {row["name"] for row in db.execute("PRAGMA table_info(%s)" % table)}
+        for name, decl in columns.items():
+            if name not in existing:
+                db.execute("ALTER TABLE %s ADD COLUMN %s %s" % (table, name, decl))
+    db.commit()
 
 
 def seed_settings(db):
@@ -483,3 +535,22 @@ def norm_rel(path):
     while path.startswith("./"):
         path = path[2:]
     return path.lstrip("/")
+
+
+def paths_overlap(a, b):
+    """两个绝对路径是否相同或互为父子。
+
+    备份目录一旦落在同步目录里面，备份文件本身会被当成新文件同步到别的站，
+    下一轮再打包一次，很快就把盘写满，所以必须挡掉。
+    """
+    if not a or not b:
+        return False
+
+    def norm(path):
+        # 统一分隔符：DSM 上是 /，本地调试时可能是 \
+        return (path or "").replace("\\", "/").rstrip("/") or "/"
+
+    left, right = norm(a), norm(b)
+    if left == right:
+        return True
+    return left.startswith(right + "/") or right.startswith(left + "/")
