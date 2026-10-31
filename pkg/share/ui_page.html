@@ -327,6 +327,7 @@ button:disabled{opacity:.5;cursor:not-allowed}
 <div class="modal" id="logModal"><div class="dialog wide">
   <div class="dialog-head"><strong id="logTitle">同步日志</strong><button class="secondary" id="closeLogModal">关闭</button></div>
   <div class="dialog-body"><div class="logbox" id="logBody">加载中…</div></div>
+  <p class="hint" style="margin:8px 2px 0">只显示最近 50 条；每个任务最多保留最近 500 条，超过自动删最旧的（调度器每天清理一次）。删除任务会一并清空它的日志。</p>
 </div></div>
 
 <div class="modal" id="dirModal"><div class="dialog">
@@ -1312,7 +1313,7 @@ function previewApi(action, data) {
   const now = new Date();
   const iso = m => new Date(now.getTime() - m * 60000).toISOString();
   const db = {
-    version: '0.3.21-0001',
+    version: '0.3.22-0001',
     settings: { trash_days: '30', conflict_copy: '1', worker_paused: '0' },
     sites: [
       { id: 'local', name: '本机 · DiskStation', kind: 'local', host: '', port: 22, ssh_user: '', key_id: '', note: '', last_check: iso(3), last_ok: 1, last_check_msg: '本机路径可直接访问', caps_json: '{}' },

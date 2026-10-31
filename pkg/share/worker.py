@@ -35,6 +35,7 @@ import localroot
 STOP = False
 TICK_SECONDS = 20
 STARTUP_STAGGER = 12  # 开机后多条规则错开启动，避免同时抢带宽
+LOG_KEEP = 500        # 每个任务最多保留多少条同步/备份日志（runs 表）
 
 
 def stop_handler(_signum, _frame):
@@ -78,6 +79,32 @@ def next_run_after(db, kind, task_id, ok):
     if ever_ok:
         return compute_next(interval), ""
     return compute_next(retry), "首轮未成功，%d 分钟后再试，直到成功一次为止" % retry
+
+
+def prune_logs(db, keep=LOG_KEEP):
+    """每个任务只保留最近 keep 条同步/备份日志，避免 runs 表无限增长。
+
+    界面「日志」本来只显示最近 50 条，但数据库会一直累积；这里每天清一次最旧的。
+    返回删掉的条数。
+    """
+    try:
+        keep = max(50, int(keep))
+    except (TypeError, ValueError):
+        keep = LOG_KEEP
+    keys = [row[0] for row in db.execute("SELECT DISTINCT rule_id FROM runs").fetchall()]
+    removed = 0
+    for key in keys:
+        stale = [row[0] for row in db.execute(
+            "SELECT id FROM runs WHERE rule_id=? ORDER BY id DESC LIMIT -1 OFFSET ?",
+            (key, keep)).fetchall()]
+        if not stale:
+            continue
+        placeholders = ",".join("?" * len(stale))
+        db.execute("DELETE FROM runs WHERE id IN (%s)" % placeholders, stale)
+        removed += len(stale)
+    if removed:
+        db.commit()
+    return removed
 
 
 def acquire_singleton():
@@ -263,6 +290,7 @@ def main():
     db = common.connect_db()
     initialize_schedule(db)
 
+    last_prune = 0  # 上次清理旧日志的时间（秒），每 24 小时清一次
     while not STOP:
         try:
             settings = common.get_settings(db)
@@ -280,6 +308,16 @@ def main():
             for table, name, info in engine.run_due_backups(db, log=lambda lv, m: log("  " + m)):
                 log("延迟备份完成「%s」：%s（%s，保留 %d 份）" % (
                     name, info["name"], common.human_size(info["size"]), info["keep"]))
+
+            # 每天清理一次旧日志：每个任务只留最近 LOG_KEEP 条
+            if time.time() - last_prune > 86400:
+                try:
+                    removed = prune_logs(db)
+                    if removed:
+                        log("清理旧同步/备份日志 %d 条（每任务保留最近 %d 条）" % (removed, LOG_KEEP))
+                except Exception as exc:  # noqa: BLE001
+                    log("清理旧日志失败：%s" % exc)
+                last_prune = time.time()
         except Exception as exc:  # noqa: BLE001
             log("调度循环异常：%s" % exc)
             log(traceback.format_exc().replace("\n", " | ")[:800])

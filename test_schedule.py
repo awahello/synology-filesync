@@ -399,5 +399,20 @@ finally:
     archive.os = real_os
     archive.TAR_BIN = old_bin
 
+# ---------------------------------------------------------------- 日志保留
+print("\n=== 日志保留（每任务最近 N 条）===")
+pid = str(uuid.uuid4())
+for i in range(60):
+    db.execute("INSERT INTO runs(rule_id,started,status,message) VALUES(?,?,'ok',?)",
+               (pid, common.now_iso(), "y%d" % i))
+db.commit()
+removed = worker.prune_logs(db, keep=50)
+left = db.execute("SELECT COUNT(*) FROM runs WHERE rule_id=?", (pid,)).fetchone()[0]
+check("超过保留数清理最旧，只留 50 条", removed == 10 and left == 50, {"removed": removed, "left": left})
+removed = worker.prune_logs(db, keep=50)
+check("已在上限内不再清理", removed == 0, removed)
+db.execute("DELETE FROM runs WHERE rule_id=?", (pid,))
+db.commit()
+
 db.close()
-print("\n0.3.21 新功能全部测试通过")
+print("\n0.3.22 新功能全部测试通过")
