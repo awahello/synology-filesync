@@ -155,7 +155,7 @@ db.execute("INSERT INTO runs(rule_id,started,status,message) VALUES(?,?,'ok','')
 db.commit()
 next_at, note = worker.next_run_after(db, "rule", task_id, False)
 gap = (common.parse_iso(next_at) - common.now_local()).total_seconds() / 60
-check("成功过之后失败回到执行间隔", 9 <= gap <= 11 and note == "", "%.1f 分钟" % gap)
+check("曾经成功过，失败仍按 60 分钟重试", 59 <= gap <= 61 and "分钟后再试" in note, "%.1f 分钟" % gap)
 
 next_at, note = worker.next_run_after(db, "rule", task_id, True)
 gap = (common.parse_iso(next_at) - common.now_local()).total_seconds() / 60

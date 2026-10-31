@@ -39,7 +39,7 @@ CSRF_PATH = PKG_VAR / "csrf.key"
 PID_PATH = PKG_VAR / "worker.pid"
 LOG_PATH = PKG_VAR / "worker.log"
 
-APP_VERSION = "0.3.22-0001"
+APP_VERSION = "0.3.28-0001"
 AUTH_CGI = "/usr/syno/synoman/webman/modules/authenticate.cgi"
 AUTH_DIAGNOSTIC = "DSM 会话验证未完成。"
 MAX_BODY = 262144
@@ -98,6 +98,10 @@ CREATE TABLE IF NOT EXISTS rules (
     mode          TEXT NOT NULL DEFAULT 'both',
     delete_policy TEXT NOT NULL DEFAULT 'trash',
     excludes      TEXT NOT NULL DEFAULT '',
+    schedule_kind TEXT NOT NULL DEFAULT 'interval',   -- interval / daily / weekly / boot
+    run_time      TEXT NOT NULL DEFAULT '02:00',      -- daily、weekly 的执行时刻
+    weekday       INTEGER NOT NULL DEFAULT 0,         -- weekly：0=周一 … 6=周日
+    boot_delay_min INTEGER NOT NULL DEFAULT 30,       -- boot：开机后等多久再跑
     interval_min  INTEGER NOT NULL DEFAULT 10,
     start_delay_min INTEGER NOT NULL DEFAULT 0,
     retry_min     INTEGER NOT NULL DEFAULT 60,
@@ -152,6 +156,10 @@ CREATE TABLE IF NOT EXISTS groups (
     name          TEXT NOT NULL,
     delete_policy TEXT NOT NULL DEFAULT 'trash',
     excludes      TEXT NOT NULL DEFAULT '',
+    schedule_kind TEXT NOT NULL DEFAULT 'interval',   -- interval / daily / weekly / boot
+    run_time      TEXT NOT NULL DEFAULT '02:00',
+    weekday       INTEGER NOT NULL DEFAULT 0,
+    boot_delay_min INTEGER NOT NULL DEFAULT 30,
     interval_min  INTEGER NOT NULL DEFAULT 10,
     start_delay_min INTEGER NOT NULL DEFAULT 0,
     retry_min     INTEGER NOT NULL DEFAULT 60,
@@ -177,16 +185,42 @@ CREATE TABLE IF NOT EXISTS group_members (
     group_id TEXT NOT NULL,
     site_id  TEXT NOT NULL,
     dir      TEXT NOT NULL,
+    slot     INTEGER NOT NULL DEFAULT 1,   -- 第几组目录：同 slot 的成员互相备份
     position INTEGER NOT NULL DEFAULT 0
 );
 
 -- 多站基线只记"上次同步后的权威版本"，同步完成后所有成员应当一致
+-- slot 参与主键：同一个组里的多组目录各自记基线，同名的 index.php 不会互相覆盖
 CREATE TABLE IF NOT EXISTS group_baseline (
     group_id TEXT NOT NULL,
+    slot     INTEGER NOT NULL DEFAULT 1,
     rel      TEXT NOT NULL,
     size     INTEGER NOT NULL,
     mtime    REAL NOT NULL,
-    PRIMARY KEY (group_id, rel)
+    PRIMARY KEY (group_id, slot, rel)
+);
+
+-- 源码备份：把网站源码目录定时打成压缩包留档，和同步任务完全独立
+-- （同步解决「两边一致」，这里解决「某个时间点上的源码快照」）
+CREATE TABLE IF NOT EXISTS source_backups (
+    id            TEXT PRIMARY KEY,
+    name          TEXT NOT NULL,
+    site_id       TEXT NOT NULL,
+    src_dir       TEXT NOT NULL,
+    target_dir    TEXT NOT NULL,
+    schedule_kind TEXT NOT NULL DEFAULT 'daily',   -- daily / weekly / interval / boot
+    run_time      TEXT NOT NULL DEFAULT '02:00',   -- daily、weekly 的执行时刻
+    weekday       INTEGER NOT NULL DEFAULT 0,      -- weekly：0=周一 … 6=周日
+    boot_delay_min INTEGER NOT NULL DEFAULT 30,    -- boot：开机后等多久再备份
+    interval_hour INTEGER NOT NULL DEFAULT 24,     -- interval：每几小时
+    keep          INTEGER NOT NULL DEFAULT 7,      -- 0 = 不限份数
+    excludes      TEXT NOT NULL DEFAULT '',
+    enabled       INTEGER NOT NULL DEFAULT 1,
+    next_run      TEXT NOT NULL DEFAULT '',
+    last_run      TEXT NOT NULL DEFAULT '',
+    last_status   TEXT NOT NULL DEFAULT '',
+    last_msg      TEXT NOT NULL DEFAULT '',
+    created       TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_members_group ON group_members(group_id);
@@ -205,6 +239,10 @@ DEFAULT_SETTINGS = {
 # 否则升级后 SELECT * 读不到新字段，保存规则会直接报错。
 MIGRATIONS = {
     "rules": {
+        "schedule_kind": "TEXT NOT NULL DEFAULT 'interval'",
+        "run_time": "TEXT NOT NULL DEFAULT '02:00'",
+        "weekday": "INTEGER NOT NULL DEFAULT 0",
+        "boot_delay_min": "INTEGER NOT NULL DEFAULT 30",
         "start_delay_min": "INTEGER NOT NULL DEFAULT 0",
         "retry_min": "INTEGER NOT NULL DEFAULT 60",
         "backup_enabled": "INTEGER NOT NULL DEFAULT 0",
@@ -217,7 +255,21 @@ MIGRATIONS = {
         "backup_last": "TEXT NOT NULL DEFAULT ''",
         "backup_msg": "TEXT NOT NULL DEFAULT ''",
     },
+    "group_members": {
+        "slot": "INTEGER NOT NULL DEFAULT 1",
+    },
+    # 源码备份是 0.3.23 才加的表，0.3.27 又补了 boot_delay_min，老库要能自动补齐
+    "source_backups": {
+        "schedule_kind": "TEXT NOT NULL DEFAULT 'daily'",
+        "run_time": "TEXT NOT NULL DEFAULT '02:00'",
+        "weekday": "INTEGER NOT NULL DEFAULT 0",
+        "boot_delay_min": "INTEGER NOT NULL DEFAULT 30",
+    },
     "groups": {
+        "schedule_kind": "TEXT NOT NULL DEFAULT 'interval'",
+        "run_time": "TEXT NOT NULL DEFAULT '02:00'",
+        "weekday": "INTEGER NOT NULL DEFAULT 0",
+        "boot_delay_min": "INTEGER NOT NULL DEFAULT 30",
         "start_delay_min": "INTEGER NOT NULL DEFAULT 0",
         "retry_min": "INTEGER NOT NULL DEFAULT 60",
         "backup_enabled": "INTEGER NOT NULL DEFAULT 0",
@@ -252,6 +304,7 @@ def connect_db():
     db.execute("PRAGMA busy_timeout=30000")
     db.executescript(SCHEMA)
     ensure_columns(db)
+    migrate_group_baseline(db)
     relax_db_permissions()
     seed_local_site(db)
     seed_settings(db)
@@ -278,9 +331,36 @@ def ensure_columns(db):
     """给老库补新增的列。SQLite 的 ADD COLUMN 是常数时间操作，重复执行无害。"""
     for table, columns in MIGRATIONS.items():
         existing = {row["name"] for row in db.execute("PRAGMA table_info(%s)" % table)}
+        if not existing:
+            continue  # 表还没建出来（理论上 SCHEMA 已建，这里兜底避免 ALTER 报错）
         for name, decl in columns.items():
             if name not in existing:
                 db.execute("ALTER TABLE %s ADD COLUMN %s %s" % (table, name, decl))
+    db.commit()
+
+
+def migrate_group_baseline(db):
+    """0.3.24：一个组支持多目录后，基线要按 slot 分开记。
+
+    SQLite 改不了主键，只能建新表搬数据；老数据统一算作第 1 组。
+    """
+    columns = {row["name"] for row in db.execute("PRAGMA table_info(group_baseline)")}
+    if not columns or "slot" in columns:
+        return
+    db.executescript("""
+        ALTER TABLE group_baseline RENAME TO group_baseline_legacy;
+        CREATE TABLE group_baseline (
+            group_id TEXT NOT NULL,
+            slot     INTEGER NOT NULL DEFAULT 1,
+            rel      TEXT NOT NULL,
+            size     INTEGER NOT NULL,
+            mtime    REAL NOT NULL,
+            PRIMARY KEY (group_id, slot, rel)
+        );
+        INSERT INTO group_baseline(group_id,slot,rel,size,mtime)
+            SELECT group_id,1,rel,size,mtime FROM group_baseline_legacy;
+        DROP TABLE group_baseline_legacy;
+    """)
     db.commit()
 
 
@@ -341,6 +421,68 @@ def parse_iso(value):
         return result.astimezone() if result.tzinfo else result.astimezone()
     except (ValueError, TypeError):
         return None
+
+
+SCHEDULE_KINDS = ("interval", "daily", "weekly", "boot")
+DEFAULT_SCHEDULE_KIND = "interval"
+
+
+def row_get(row, key, default=None):
+    """sqlite3.Row / dict 通用的取值：缺列或为空都退回默认值。"""
+    try:
+        value = row[key]
+    except (KeyError, IndexError, TypeError):
+        return default
+    return default if value is None else value
+
+
+def parse_clock(value):
+    """'02:00' → (2, 0)；格式不对退回 02:00。"""
+    try:
+        hour, minute = str(value or "").split(":")[:2]
+        hour, minute = int(hour), int(minute)
+        if 0 <= hour <= 23 and 0 <= minute <= 59:
+            return hour, minute
+    except (TypeError, ValueError):
+        pass
+    return 2, 0
+
+
+def schedule_next(row, base=None, boot_delay_min=30):
+    """按「执行方式」算下一轮时间。
+
+    interval → base + interval_min 分钟（默认 10，和旧行为一致）
+    daily    → 今天/明天的 run_time（HH:MM）
+    weekly   → 本周/下周的 weekday（0=周一）+ run_time
+    boot     → base + boot_delay_min 分钟（开机后先等一会，避开开机高峰）
+    """
+    base = (base or now_local()).astimezone()
+    kind = row_get(row, "schedule_kind", DEFAULT_SCHEDULE_KIND) or DEFAULT_SCHEDULE_KIND
+    if kind == "boot":
+        try:
+            delay = max(1, int(row_get(row, "boot_delay_min", boot_delay_min)))
+        except (TypeError, ValueError):
+            delay = boot_delay_min
+        return base + dt.timedelta(minutes=delay)
+    if kind in ("daily", "weekly"):
+        hour, minute = parse_clock(row_get(row, "run_time", "02:00"))
+        candidate = dt.datetime.combine(base.date(), dt.time(hour, minute), tzinfo=base.tzinfo)
+        if kind == "weekly":
+            try:
+                weekday = min(6, max(0, int(row_get(row, "weekday", 0))))
+            except (TypeError, ValueError):
+                weekday = 0
+            candidate += dt.timedelta(days=(weekday - base.weekday()) % 7)
+            if candidate <= base:
+                candidate += dt.timedelta(days=7)
+        elif candidate <= base:
+            candidate += dt.timedelta(days=1)
+        return candidate
+    try:
+        minutes = max(1, int(row_get(row, "interval_min", 10)))
+    except (TypeError, ValueError):
+        minutes = 10
+    return base + dt.timedelta(minutes=minutes)
 
 
 def human_size(num):

@@ -18,7 +18,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 PKG = ROOT / "pkg"
-VERSION = "0.3.22-0001"
+VERSION = "0.3.28-0001"
 OUT = ROOT.parent / ("多站文件同步-" + VERSION.split("-")[0] + ".spk")
 
 # package.tgz 内的条目（顺序即打包顺序）
@@ -28,6 +28,7 @@ PAYLOAD = [
     ("share/remote.py", "f"),
     ("share/engine.py", "f"),
     ("share/archive.py", "f"),
+    ("share/sourcebackup.py", "f"),
     ("share/localroot.py", "f"),
     ("share/run_worker.sh", "f"),
     ("share/stop_worker.sh", "f"),
@@ -100,7 +101,9 @@ def build_info():
         'os_min_ver="7.0-40000"\n'
         'description="多站点文件互相同步：在本机与 OpenWrt 路由、Linux 服务器之间按最新修改时间双向同步指定目录，'
         '冲突以较新文件为准，删除可跟随并进入回收站。通过 SSH 免密连接，支持 rsync 增量传输与 tar 降级，'
-        '可配置双向互备或单向备份。"\n'
+        '可配置双向互备或单向备份，一个同步组可放多组目录。执行方式统一支持按间隔/每天/每周/开机后。'
+        '另带独立的源码备份：把本机或远程站点上的'
+        '网站源码打成压缩包留档，按份数轮转。"\n'
         'displayname="多站文件同步"\n'
         'extractsize="' + str(extract_kb) + '"\n'
         'toolkit_version="90074"\n'

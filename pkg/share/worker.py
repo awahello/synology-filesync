@@ -28,9 +28,12 @@ try:  # Windows 上没有 fcntl，仅影响本地调试，DSM 上始终可用
 except ImportError:  # pragma: no cover
     fcntl = None
 
+from pathlib import Path
+
 import common
 import engine
 import localroot
+import sourcebackup
 
 STOP = False
 TICK_SECONDS = 20
@@ -54,31 +57,42 @@ def compute_next(minutes, base=None):
     return (base + dt.timedelta(minutes=minutes)).isoformat(timespec="seconds")
 
 
+def _boot_stamp():
+    """本次开机的标识，用来保证「开机后执行」每次开机只跑一次（套件重启不重复）。"""
+    try:
+        return Path("/proc/sys/kernel/random/boot_id").read_text(encoding="ascii").strip()
+    except OSError:
+        return "boot-" + time.strftime("%Y-%m-%d")
+
+
 def next_run_after(db, kind, task_id, ok):
     """算下一轮时间，返回 (iso, 说明)。
 
-    成功           → 按执行间隔
-    失败但从未成功 → 按 retry_min 重试，直到成功一次为止（首轮失败多半是网络或
-                     密钥还没准备好，隔一小时再试比等一整个间隔更合理）
-    失败且已成功过 → 按执行间隔，避免长期失败时每 20 秒猛冲
+    执行方式决定「下一轮」：按间隔 → +interval_min；每天/每周 → 下一个时间点；
+    开机后 → 本次开机只跑一次，成功后清空 next_run（失败仍按 retry_min 重试）。
+    失败但从未成功时按 retry_min 重试，直到成功一次为止（首轮失败多半是公钥
+    没装好或对方没开机）；失败且已成功过则回到正常排期，避免每 20 秒猛冲。
     """
     table = "rules" if kind == "rule" else "groups"
-    row = db.execute("SELECT interval_min,retry_min FROM %s WHERE id=?" % table, (task_id,)).fetchone()
-    interval = row["interval_min"] if row else 10
-    if ok or row is None:
-        return compute_next(interval), ""
+    row = db.execute("SELECT * FROM %s WHERE id=?" % table, (task_id,)).fetchone()
+    if row is None:
+        return compute_next(10), ""
+    schedule = common.row_get(row, "schedule_kind", "interval") or "interval"
+
+    def normal():
+        if schedule == "boot":
+            return ""  # 本次开机已完成，等下一次开机再排
+        return common.schedule_next(row).isoformat(timespec="seconds")
+
+    if ok:
+        return normal(), ""
     retry = int(row["retry_min"] or 0)
     if retry <= 0:
-        return compute_next(interval), ""
-    run_key = task_id if kind == "rule" else "group:" + task_id
-    # 只看「同步成功」的记录；压缩备份也会写 runs，别把备份成功当成同步成功
-    ever_ok = db.execute(
-        "SELECT 1 FROM runs WHERE rule_id=? AND status='ok' "
-        "AND message NOT LIKE '压缩备份%' LIMIT 1", (run_key,)
-    ).fetchone()
-    if ever_ok:
-        return compute_next(interval), ""
-    return compute_next(retry), "首轮未成功，%d 分钟后再试，直到成功一次为止" % retry
+        return normal(), ""
+    # 失败就重试，不区分「以前有没有成功过」：每天/每周的任务失败后等明天太亏，
+    # 开机后执行的任务更是要等下次开机。按 retry_min（默认 60 分钟）再试，
+    # 成功后自然回到正常排期，所以不会一直空转。
+    return compute_next(retry), "本次未成功，%d 分钟后再试" % retry
 
 
 def prune_logs(db, keep=LOG_KEEP):
@@ -150,14 +164,37 @@ def initialize_schedule(db):
     """
     now = common.now_local()
     offset = 0
+    boot = _boot_stamp()
+    prior = db.execute("SELECT value FROM settings WHERE key='sync_boot'").fetchone()
+    new_boot = not prior or prior["value"] != boot
     for table in ("rules", "groups"):
         for row in db.execute("SELECT * FROM %s WHERE enabled=1 ORDER BY created" % table).fetchall():
+            schedule = common.row_get(row, "schedule_kind", "interval") or "interval"
             due = common.parse_iso(row["next_run"])
-            if due is None or due <= now:
+            if schedule == "boot":
+                # 开机后执行：每次开机排一次，套件重启不重复触发。
+                # 延迟可配（默认 30 分钟），开机时磁盘/网络都在忙，太早跑容易卡住
+                if not new_boot:
+                    continue
+                try:
+                    delay = max(1, int(row["boot_delay_min"] or 30))
+                except (TypeError, ValueError, IndexError):
+                    delay = 30
+                target = (now + dt.timedelta(minutes=delay, seconds=offset)).isoformat(timespec="seconds")
+            elif schedule in ("daily", "weekly"):
+                if due is not None and due > now:
+                    continue
+                target = common.schedule_next(row, now).isoformat(timespec="seconds")
+            else:
+                if due is not None and due > now:
+                    continue
                 delay = max(0, int(row["start_delay_min"] or 0))
                 target = (now + dt.timedelta(minutes=delay, seconds=5 + offset)).isoformat(timespec="seconds")
-                db.execute("UPDATE %s SET next_run=? WHERE id=?" % table, (target, row["id"]))
-                offset += STARTUP_STAGGER
+            db.execute("UPDATE %s SET next_run=? WHERE id=?" % table, (target, row["id"]))
+            offset += STARTUP_STAGGER
+    if new_boot:
+        db.execute("INSERT INTO settings(key,value) VALUES('sync_boot',?) "
+                   "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (boot,))
     db.commit()
 
 
@@ -168,7 +205,12 @@ def due_tasks(db):
     for kind, table in (("rule", "rules"), ("group", "groups")):
         for row in db.execute("SELECT * FROM %s WHERE enabled=1" % table).fetchall():
             due = common.parse_iso(row["next_run"])
-            if due is None or due <= now:
+            if due is None:
+                # 开机后执行的任务跑完会清空 next_run，不能当成「到点」再跑一遍
+                if (common.row_get(row, "schedule_kind", "interval") or "interval") == "boot":
+                    continue
+                result.append((kind, row))
+            elif due <= now:
                 result.append((kind, row))
     return result
 
@@ -209,6 +251,34 @@ def run_task(db, kind, row):
         db.commit()
         if note:
             log("%s「%s」%s" % (label, row["name"], note))
+
+
+def run_source_task(db, row):
+    """执行一个源码备份任务：本机直接打包，远程用 ssh tar 流写回本机。
+
+    成功按间隔排下一轮，失败 30 分钟后再试——备份失败多半是网络或对方没开机，
+    等一整个间隔（可能 24 小时）太亏。
+    """
+    label = "源码备份「%s」" % row["name"]
+    log("开始%s（%s:%s）" % (label, row["site_id"], row["src_dir"]))
+    started = time.time()
+    ok = False
+    try:
+        info = sourcebackup.run_task(db, row, log=lambda lv, m: log("  " + m))
+        log("%s完成，耗时 %.1f 秒：%s（%s，保留 %d 份%s）" % (
+            label, time.time() - started, info["name"], common.human_size(info["size"]),
+            info["keep"], "，清理 %d 份旧包" % info["removed"] if info["removed"] else ""))
+        ok = True
+    except sourcebackup.BackupError as exc:
+        log("%s失败：%s" % (label, exc))
+    except Exception as exc:  # noqa: BLE001
+        log("%s异常：%s" % (label, exc))
+        log(traceback.format_exc().replace("\n", " | ")[:800])
+    finally:
+        next_at = sourcebackup.next_run_after(ok, row)
+        db.execute("UPDATE source_backups SET next_run=? WHERE id=?", (next_at, row["id"]))
+        db.commit()
+        log("%s下次：%s" % (label, next_at))
 
 
 def idle_wait(server, seconds):
@@ -287,8 +357,25 @@ def main():
             target=serve_socket, args=(server,), name="filesync-browse", daemon=True
         ).start()
 
-    db = common.connect_db()
+    # 建库/补列失败时别直接崩：DSM 不一定会自动拉起进程，重试几次再退出
+    db = None
+    for attempt in range(3):
+        try:
+            db = common.connect_db()
+            break
+        except Exception as exc:  # noqa: BLE001
+            log("数据库初始化失败（第 %d 次）：%s" % (attempt + 1, exc))
+            time.sleep(10)
+    if db is None:
+        log("数据库不可用，调度进程退出")
+        return 1
+
     initialize_schedule(db)
+    # 源码备份按「每天/每周/间隔/开机后」排期，规则和同步任务不同，单独处理
+    try:
+        sourcebackup.initialize_schedule(db)
+    except Exception as exc:  # noqa: BLE001 - 排期失败不能让整个调度进程起不来
+        log("源码备份排期失败：%s" % exc)
 
     last_prune = 0  # 上次清理旧日志的时间（秒），每 24 小时清一次
     while not STOP:
@@ -308,6 +395,12 @@ def main():
             for table, name, info in engine.run_due_backups(db, log=lambda lv, m: log("  " + m)):
                 log("延迟备份完成「%s」：%s（%s，保留 %d 份）" % (
                     name, info["name"], common.human_size(info["size"]), info["keep"]))
+
+            # 源码备份是独立任务：自己定时，源目录可以在本机也可以在远程站点
+            for row in sourcebackup.due_tasks(db):
+                if STOP:
+                    break
+                run_source_task(db, row)
 
             # 每天清理一次旧日志：每个任务只留最近 LOG_KEEP 条
             if time.time() - last_prune > 86400:

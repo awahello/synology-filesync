@@ -206,6 +206,25 @@ def _unlink(path):
         pass
 
 
+def pack_to(source, output, excludes=(), fmt=DEFAULT_FORMAT):
+    """把 source 目录打包到指定路径 output，不做命名和轮转。
+
+    源码备份要用「任务名」而不是「目录名」命名，轮转也按任务算，所以单独
+    暴露这一层；create_archive 仍走原来的命名 + 轮转逻辑，两者互不影响。
+    """
+    source = (source or "").rstrip("/")
+    if not source or not os.path.isdir(source):
+        raise ArchiveError("目录不可用：" + (source or "（未设置）"))
+    parent, base = os.path.split(source)
+    if not base:
+        raise ArchiveError("不能直接打包根目录 /")
+    patterns = _clean_patterns(excludes)
+    if (fmt or DEFAULT_FORMAT) == "tar":
+        _run_tar(parent, base, output, patterns)
+    else:
+        _run_zip(parent, base, output, patterns)
+
+
 def create_archive(source, target_dir, keep=7, excludes=(), fmt=DEFAULT_FORMAT):
     """把 source 目录打包成 target_dir 下的 zip（默认）或 tar.gz，并按份数清理旧包。
 

@@ -594,10 +594,11 @@ def load_group_members(db, group_id):
     return members
 
 
-def load_group_baseline(db, group_id):
+def load_group_baseline(db, group_id, slot=1):
     return {
         row["rel"]: (row["size"], remote.norm_mtime(row["mtime"]))
-        for row in db.execute("SELECT rel,size,mtime FROM group_baseline WHERE group_id=?", (group_id,))
+        for row in db.execute(
+            "SELECT rel,size,mtime FROM group_baseline WHERE group_id=? AND slot=?", (group_id, slot))
     }
 
 
@@ -689,11 +690,9 @@ def decide_group(manifests, baseline, delete_follow):
 def run_group(db, group_id, trigger="manual", log=None):
     """执行一次多站互备。
 
-    流程刻意分成三段，与用户的心智模型一致：
-        ① 把各路径的胜出版本先拉回本机
-        ② 再从本机推给其余成员
-        ③ 最后处理删除
-    这样本机始终是"中转站"，A 与 C 之间不需要直连。
+    一个组里可以放「多组目录」（每个成员带 slot）：同 slot 的成员互相同步，
+    不同 slot 各自独立。这样 /web/usr、/web/tu、/web/rules 三个目录配一个组就够，
+    不用建三个组、也不用记三份排期。
     """
     def emit(message, level="info"):
         if log:
@@ -713,198 +712,31 @@ def run_group(db, group_id, trigger="manual", log=None):
         members = load_group_members(db, group_id)
         if len(members) < 2:
             raise GroupError("同步组至少需要 2 个成员")
-        locals_ = [m for m in members if m["site"]["kind"] == "local"]
-        if not locals_:
-            raise GroupError("同步组必须包含本机成员（本机是中转站）")
-        local_member = locals_[0]
-        by_id = {m["id"]: m for m in members}
+
+        slots = {}
+        for member in members:
+            slots.setdefault(member["slot"] or 1, []).append(member)
 
         settings = common.get_settings(db)
-        delete_follow = group["delete_policy"] in ("trash", "purge")
         patterns = remote.compile_excludes(group["excludes"])
         stamp = time.strftime("%Y%m%d-%H%M%S")
-        detail = []          # 记录实际操作，写进日志供界面查看
+        detail = []
+        total = {"pulled": 0, "pushed": 0, "deleted": 0, "conflicts": 0,
+                 "bytes": 0, "leftover": 0, "same": 0}
 
-        # ---------- 扫描 ----------
-        manifests = {}
-        for member in members:
-            manifest = remote.scan_side(member["site"], member["dir"])
-            manifest = remote.filter_manifest(manifest, patterns)
-            manifests[member["id"]] = manifest
-            emit("扫描 %s（%s）：%d 个文件" % (member["site"]["name"], member["dir"], len(manifest)))
-
-        baseline = load_group_baseline(db, group_id)
-        # 某成员扫描到 0 个文件、而基线里有过记录，说明该站目录可能失效（路径错/未挂载）。
-        # 此时若按多数决删除，会把仅存的文件从其他站删掉，所以本轮禁用删除。
-        empty_members = [m for m in members if not manifests[m["id"]]]
-        if empty_members and baseline:
-            names = "、".join(m["site"]["name"] for m in empty_members)
-            emit("警告：%s 扫描到 0 个文件，本轮不执行删除（请检查该站目录是否正确）" % names, "warn")
-            delete_follow = False
-        plan = decide_group(manifests, baseline, delete_follow)
-        if not plan["winners"] and not plan["delete"]:
-            emit("三站内容一致：%d 个文件全部已是最新，本轮只扫描检查，不拉取也不推送" % plan["same"], "good")
-        else:
-            emit("决策：%d 个文件需更新，%d 个已一致（不动），%d 个待删除，%d 个冲突" % (
-                len(plan["winners"]), plan["same"], len(plan["delete"]), len(plan["conflicts"])))
-
-        # ---------- 冲突副本 ----------
-        if plan["conflicts"] and settings.get("conflict_copy") == "1":
-            grouped = {}
-            for rel, mid in plan["conflicts"]:
-                grouped.setdefault(mid, []).append(rel)
-            for mid, files in grouped.items():
-                member = by_id[mid]
-                moved = remote.trash_side(member["site"], member["dir"], files, "conflicts/" + stamp)
-                emit("保留 %d 个冲突副本（%s 侧）" % (moved, member["site"]["name"]), "warn")
-
-        # ---------- 阶段一：胜出版本拉回本机 ----------
-        pull_by_source = {}
-        for rel, winner_id in plan["winners"].items():
-            if winner_id == local_member["id"]:
-                continue
-            local_meta = manifests[local_member["id"]].get(rel)
-            if local_meta == manifests[winner_id][rel]:
-                continue
-            pull_by_source.setdefault(winner_id, []).append(rel)
-
-        # 时间不同但内容相同（复制/解压导致时间漂移）不应重复传输：
-        # 用内容哈希确认，相同的从计划里剔除，只保留真正内容不同的文件。
-        skipped_same = 0
-        if pull_by_source:
-            for winner_id in list(pull_by_source):
-                files = pull_by_source[winner_id]
-                try:
-                    src_hashes = remote.hash_side(by_id[winner_id]["site"], by_id[winner_id]["dir"], files)
-                    dst_hashes = remote.hash_side(local_member["site"], local_member["dir"], files)
-                except remote.RemoteError as exc:
-                    emit("计算哈希失败，按原计划传输：%s" % exc, "warn")
-                    continue
-                keep = [rel for rel in files if src_hashes.get(rel) != dst_hashes.get(rel)]
-                skipped_same += len(files) - len(keep)
-                if keep:
-                    pull_by_source[winner_id] = keep
-                else:
-                    del pull_by_source[winner_id]
-        if skipped_same:
-            emit("内容相同、仅时间不同：跳过 %d 个文件" % skipped_same, "good")
-
-        pulled = 0
-        bytes_moved = 0
-        for winner_id, files in pull_by_source.items():
-            source = by_id[winner_id]
-            size = sum(manifests[winner_id][rel][0] for rel in files)
-            emit("阶段一：从 %s 拉回 %d 个文件（%s）：%s" % (
-                source["site"]["name"], len(files), common.human_size(size), _brief(files)))
-            detail.append("拉回 %s → 本机（%d 个，以 %s 的版本为准）：%s" % (
-                source["site"]["name"], len(files), source["site"]["name"], _brief(files)))
-            remote.transfer(source["site"], source["dir"],
-                            local_member["site"], local_member["dir"], files)
-            # 传输后把本机 mtime 统一为权威值：不依赖 rsync/tar 是否保留时间，
-            # 否则目标时间一旦漂移，下一轮又会被判成「有变化」而反复重传。
-            try:
-                remote.set_mtime(local_member["site"], local_member["dir"],
-                                 [(rel, manifests[winner_id][rel][1]) for rel in files])
-            except remote.RemoteError as exc:
-                emit("统一本机文件时间失败（文件已同步，不影响内容）：%s" % exc, "warn")
-            pulled += len(files)
-            bytes_moved += size
-        if not pulled:
-            emit("阶段一：本机已是各文件的最新版本，无需拉取")
-
-        # ---------- 阶段二：从本机推给其余成员 ----------
-        pushed = 0
-        for member in members:
-            if member["id"] == local_member["id"]:
-                continue
-            need = []
-            for rel, winner_id in plan["winners"].items():
-                if rel in plan["delete"]:
-                    continue
-                target_meta = manifests[member["id"]].get(rel)
-                if target_meta != manifests[winner_id][rel]:
-                    need.append(rel)
-            if need:
-                try:
-                    src_hashes = remote.hash_side(local_member["site"], local_member["dir"], need)
-                    dst_hashes = remote.hash_side(member["site"], member["dir"], need)
-                    before = len(need)
-                    need = [rel for rel in need if src_hashes.get(rel) != dst_hashes.get(rel)]
-                    skipped_same += before - len(need)
-                except remote.RemoteError as exc:
-                    emit("计算哈希失败，按原计划推送：%s" % exc, "warn")
-            if not need:
-                continue
-            size = sum(manifests[plan["winners"][rel]][rel][0] for rel in need)
-            emit("阶段二：推送 %d 个文件到 %s（%s）：%s" % (
-                len(need), member["site"]["name"], common.human_size(size), _brief(need)))
-            detail.append("推送 本机 → %s（%d 个）：%s" % (
-                member["site"]["name"], len(need), _brief(need)))
-            remote.transfer(local_member["site"], local_member["dir"],
-                            member["site"], member["dir"], need)
-            # 目标站的时间同样统一为权威值，保证三站 mtime 完全一致
-            try:
-                remote.set_mtime(member["site"], member["dir"],
-                                 [(rel, manifests[plan["winners"][rel]][rel][1]) for rel in need])
-            except remote.RemoteError as exc:
-                emit("统一 %s 文件时间失败（文件已同步，不影响内容）：%s" % (
-                    member["site"]["name"], exc), "warn")
-            pushed += len(need)
-            bytes_moved += size
-        if not pushed:
-            emit("阶段二：其余成员都已是最新，无需推送")
-
-        # ---------- 阶段三：删除 ----------
-        deleted = 0
-        for rel in plan["delete"]:
-            for member in members:
-                if rel not in manifests[member["id"]]:
-                    continue
-                if group["delete_policy"] == "purge":
-                    deleted += remote.purge_side(member["site"], member["dir"], [rel])
-                else:
-                    deleted += remote.trash_side(member["site"], member["dir"], [rel], stamp)
-        if deleted:
-            emit("阶段三：多数成员已删除，跟随删除 %d 个文件（%s）：%s" % (
-                deleted, "直接删除" if group["delete_policy"] == "purge" else "已移入回收站",
-                _brief(plan["delete"])))
-            detail.append("删除（多数决，%d 个）：%s" % (deleted, _brief(plan["delete"])))
-
-        # ---------- 重建基线 ----------
-        after = {}
-        for member in members:
-            after[member["id"]] = remote.filter_manifest(
-                remote.scan_side(member["site"], member["dir"]), patterns)
-        rels = set()
-        for manifest in after.values():
-            rels |= set(manifest)
-
-        rows = []
-        leftover = 0
-        for rel in rels:
-            present = [after[mid][rel] for mid in after if rel in after[mid]]
-            if not present:
-                continue
-            counts = {}
-            for meta in present:
-                counts[meta] = counts.get(meta, 0) + 1
-            best = max(counts.items(), key=lambda kv: (kv[1], kv[0][1]))[0]
-            rows.append((group_id, rel, best[0], best[1]))
-            if len(counts) > 1:
-                leftover += 1
-
-        db.execute("DELETE FROM group_baseline WHERE group_id=?", (group_id,))
-        db.executemany(
-            "INSERT OR REPLACE INTO group_baseline(group_id,rel,size,mtime) VALUES(?,?,?,?)", rows)
-        db.commit()
-
-        if leftover:
-            emit("注意：仍有 %d 个文件在成员间不一致，下轮会重试" % leftover, "warn")
-
-        keep_days = int(settings.get("trash_days") or 0)
-        if keep_days > 0:
-            for member in members:
-                remote.purge_trash(member["site"], member["dir"], keep_days)
+        for slot in sorted(slots):
+            slot_members = slots[slot]
+            if len(slot_members) < 2:
+                raise GroupError("第 %d 组目录至少需要 2 个成员" % slot)
+            if not any(m["site"]["kind"] == "local" for m in slot_members):
+                raise GroupError("第 %d 组目录必须包含本机成员（本机是中转站）" % slot)
+            if len(slots) > 1:
+                emit("—— 第 %d 组目录 ——" % slot)
+                detail.append("【第 %d 组目录】" % slot)
+            stats = _run_group_slot(db, group, slot_members, slot, settings, patterns,
+                                    stamp, emit, detail)
+            for key in total:
+                total[key] += stats.get(key, 0)
 
         # 压缩备份：只备份本机（中转站）目录，同步成功后延迟 N 分钟再由 worker 打包
         try:
@@ -914,28 +746,21 @@ def run_group(db, group_id, trigger="manual", log=None):
         except RuleError as exc:
             detail.append("压缩备份排期失败：%s" % str(exc)[:200])
 
-        stats = {
-            "pulled": pulled,
-            "pushed": pushed,
-            "deleted": deleted,
-            "conflicts": len(plan["conflicts"]),
-            "bytes": bytes_moved,
-            "leftover": leftover,
-            "same": plan["same"],
-        }
         message = "拉回 %d，推送 %d，删除 %d，冲突 %d，未变 %d" % (
-            pulled, pushed, deleted, len(plan["conflicts"]), plan["same"])
+            total["pulled"], total["pushed"], total["deleted"],
+            total["conflicts"], total["same"])
         if detail:
             message += "\n" + "\n".join(detail)
         db.execute(
             "UPDATE runs SET finished=?,status='ok',up_count=?,down_count=?,del_count=?,bytes=?,message=? WHERE id=?",
-            (common.now_iso(), pushed, pulled, deleted, bytes_moved, message, run_id),
+            (common.now_iso(), total["pushed"], total["pulled"], total["deleted"],
+             total["bytes"], message, run_id),
         )
         db.execute("UPDATE groups SET last_run=?,last_status='ok',last_message=? WHERE id=?",
                    (common.now_iso(), message, group_id))
         db.commit()
         emit("完成：" + message, "good")
-        return stats
+        return total
 
     except Exception as exc:  # noqa: BLE001
         detail = str(exc)[:500] or type(exc).__name__
@@ -950,34 +775,249 @@ def run_group(db, group_id, trigger="manual", log=None):
         _release_lock(lock_fd)
 
 
+def _run_group_slot(db, group, members, slot, settings, patterns, stamp, emit, detail):
+    """一组目录的三阶段同步：拉回本机 → 推给其余成员 → 处理删除。
+
+    流程刻意分成三段，与用户的心智模型一致：本机始终是「中转站」，
+    A 与 C 之间不需要能互相访问。
+    """
+    group_id = group["id"]
+    local_member = next(m for m in members if m["site"]["kind"] == "local")
+    by_id = {m["id"]: m for m in members}
+    delete_follow = group["delete_policy"] in ("trash", "purge")
+
+    # ---------- 扫描 ----------
+    manifests = {}
+    for member in members:
+        manifest = remote.scan_side(member["site"], member["dir"])
+        manifest = remote.filter_manifest(manifest, patterns)
+        manifests[member["id"]] = manifest
+        emit("扫描 %s（%s）：%d 个文件" % (member["site"]["name"], member["dir"], len(manifest)))
+
+    baseline = load_group_baseline(db, group_id, slot)
+    # 某成员扫描到 0 个文件、而基线里有过记录，说明该站目录可能失效（路径错/未挂载）。
+    # 此时若按多数决删除，会把仅存的文件从其他站删掉，所以本轮禁用删除。
+    empty_members = [m for m in members if not manifests[m["id"]]]
+    if empty_members and baseline:
+        names = "、".join(m["site"]["name"] for m in empty_members)
+        emit("警告：%s 扫描到 0 个文件，本轮不执行删除（请检查该站目录是否正确）" % names, "warn")
+        delete_follow = False
+    plan = decide_group(manifests, baseline, delete_follow)
+    if not plan["winners"] and not plan["delete"]:
+        emit("内容一致：%d 个文件全部已是最新，本轮只扫描检查，不拉取也不推送" % plan["same"], "good")
+    else:
+        emit("决策：%d 个文件需更新，%d 个已一致（不动），%d 个待删除，%d 个冲突" % (
+            len(plan["winners"]), plan["same"], len(plan["delete"]), len(plan["conflicts"])))
+
+    # ---------- 冲突副本 ----------
+    if plan["conflicts"] and settings.get("conflict_copy") == "1":
+        grouped = {}
+        for rel, mid in plan["conflicts"]:
+            grouped.setdefault(mid, []).append(rel)
+        for mid, files in grouped.items():
+            member = by_id[mid]
+            moved = remote.trash_side(member["site"], member["dir"], files, "conflicts/" + stamp)
+            emit("保留 %d 个冲突副本（%s 侧）" % (moved, member["site"]["name"]), "warn")
+
+    # ---------- 阶段一：胜出版本拉回本机 ----------
+    pull_by_source = {}
+    for rel, winner_id in plan["winners"].items():
+        if winner_id == local_member["id"]:
+            continue
+        local_meta = manifests[local_member["id"]].get(rel)
+        if local_meta == manifests[winner_id][rel]:
+            continue
+        pull_by_source.setdefault(winner_id, []).append(rel)
+
+    # 时间不同但内容相同（复制/解压导致时间漂移）不应重复传输：
+    # 用内容哈希确认，相同的从计划里剔除，只保留真正内容不同的文件。
+    skipped_same = 0
+    if pull_by_source:
+        for winner_id in list(pull_by_source):
+            files = pull_by_source[winner_id]
+            try:
+                src_hashes = remote.hash_side(by_id[winner_id]["site"], by_id[winner_id]["dir"], files)
+                dst_hashes = remote.hash_side(local_member["site"], local_member["dir"], files)
+            except remote.RemoteError as exc:
+                emit("计算哈希失败，按原计划传输：%s" % exc, "warn")
+                continue
+            keep = [rel for rel in files if src_hashes.get(rel) != dst_hashes.get(rel)]
+            skipped_same += len(files) - len(keep)
+            if keep:
+                pull_by_source[winner_id] = keep
+            else:
+                del pull_by_source[winner_id]
+    if skipped_same:
+        emit("内容相同、仅时间不同：跳过 %d 个文件" % skipped_same, "good")
+
+    pulled = 0
+    bytes_moved = 0
+    for winner_id, files in pull_by_source.items():
+        source = by_id[winner_id]
+        size = sum(manifests[winner_id][rel][0] for rel in files)
+        emit("阶段一：从 %s 拉回 %d 个文件（%s）：%s" % (
+            source["site"]["name"], len(files), common.human_size(size), _brief(files)))
+        detail.append("拉回 %s → 本机（%d 个，以 %s 的版本为准）：%s" % (
+            source["site"]["name"], len(files), source["site"]["name"], _brief(files)))
+        remote.transfer(source["site"], source["dir"],
+                        local_member["site"], local_member["dir"], files)
+        # 传输后把本机 mtime 统一为权威值：不依赖 rsync/tar 是否保留时间，
+        # 否则目标时间一旦漂移，下一轮又会被判成「有变化」而反复重传。
+        try:
+            remote.set_mtime(local_member["site"], local_member["dir"],
+                             [(rel, manifests[winner_id][rel][1]) for rel in files])
+        except remote.RemoteError as exc:
+            emit("统一本机文件时间失败（文件已同步，不影响内容）：%s" % exc, "warn")
+        pulled += len(files)
+        bytes_moved += size
+    if not pulled:
+        emit("阶段一：本机已是各文件的最新版本，无需拉取")
+
+    # ---------- 阶段二：从本机推给其余成员 ----------
+    pushed = 0
+    for member in members:
+        if member["id"] == local_member["id"]:
+            continue
+        need = []
+        for rel, winner_id in plan["winners"].items():
+            if rel in plan["delete"]:
+                continue
+            target_meta = manifests[member["id"]].get(rel)
+            if target_meta != manifests[winner_id][rel]:
+                need.append(rel)
+        if need:
+            try:
+                src_hashes = remote.hash_side(local_member["site"], local_member["dir"], need)
+                dst_hashes = remote.hash_side(member["site"], member["dir"], need)
+                before = len(need)
+                need = [rel for rel in need if src_hashes.get(rel) != dst_hashes.get(rel)]
+                skipped_same += before - len(need)
+            except remote.RemoteError as exc:
+                emit("计算哈希失败，按原计划推送：%s" % exc, "warn")
+        if not need:
+            continue
+        size = sum(manifests[plan["winners"][rel]][rel][0] for rel in need)
+        emit("阶段二：推送 %d 个文件到 %s（%s）：%s" % (
+            len(need), member["site"]["name"], common.human_size(size), _brief(need)))
+        detail.append("推送 本机 → %s（%d 个）：%s" % (
+            member["site"]["name"], len(need), _brief(need)))
+        remote.transfer(local_member["site"], local_member["dir"],
+                        member["site"], member["dir"], need)
+        # 目标站的时间同样统一为权威值，保证三站 mtime 完全一致
+        try:
+            remote.set_mtime(member["site"], member["dir"],
+                             [(rel, manifests[plan["winners"][rel]][rel][1]) for rel in need])
+        except remote.RemoteError as exc:
+            emit("统一 %s 文件时间失败（文件已同步，不影响内容）：%s" % (
+                member["site"]["name"], exc), "warn")
+        pushed += len(need)
+        bytes_moved += size
+    if not pushed:
+        emit("阶段二：其余成员都已是最新，无需推送")
+
+    # ---------- 阶段三：删除 ----------
+    deleted = 0
+    for rel in plan["delete"]:
+        for member in members:
+            if rel not in manifests[member["id"]]:
+                continue
+            if group["delete_policy"] == "purge":
+                deleted += remote.purge_side(member["site"], member["dir"], [rel])
+            else:
+                deleted += remote.trash_side(member["site"], member["dir"], [rel], stamp)
+    if deleted:
+        emit("阶段三：多数成员已删除，跟随删除 %d 个文件（%s）：%s" % (
+            deleted, "直接删除" if group["delete_policy"] == "purge" else "已移入回收站",
+            _brief(plan["delete"])))
+        detail.append("删除（多数决，%d 个）：%s" % (deleted, _brief(plan["delete"])))
+
+    # ---------- 重建基线 ----------
+    after = {}
+    for member in members:
+        after[member["id"]] = remote.filter_manifest(
+            remote.scan_side(member["site"], member["dir"]), patterns)
+    rels = set()
+    for manifest in after.values():
+        rels |= set(manifest)
+
+    rows = []
+    leftover = 0
+    for rel in rels:
+        present = [after[mid][rel] for mid in after if rel in after[mid]]
+        if not present:
+            continue
+        counts = {}
+        for meta in present:
+            counts[meta] = counts.get(meta, 0) + 1
+        best = max(counts.items(), key=lambda kv: (kv[1], kv[0][1]))[0]
+        rows.append((group_id, slot, rel, best[0], best[1]))
+        if len(counts) > 1:
+            leftover += 1
+
+    db.execute("DELETE FROM group_baseline WHERE group_id=? AND slot=?", (group_id, slot))
+    db.executemany(
+        "INSERT OR REPLACE INTO group_baseline(group_id,slot,rel,size,mtime) VALUES(?,?,?,?,?)", rows)
+    db.commit()
+
+    if leftover:
+        emit("注意：仍有 %d 个文件在成员间不一致，下轮会重试" % leftover, "warn")
+
+    keep_days = int(settings.get("trash_days") or 0)
+    if keep_days > 0:
+        for member in members:
+            remote.purge_trash(member["site"], member["dir"], keep_days)
+
+    return {
+        "pulled": pulled,
+        "pushed": pushed,
+        "deleted": deleted,
+        "conflicts": len(plan["conflicts"]),
+        "bytes": bytes_moved,
+        "leftover": leftover,
+        "same": plan["same"],
+    }
+
+
 def test_group(db, group_id):
-    """只扫描和决策，不传输。"""
+    """只扫描和决策，不传输。多组目录时逐组预演后汇总。"""
     group = load_group(db, group_id)
     members = load_group_members(db, group_id)
     if not members:
         raise GroupError("同步组还没有成员")
     patterns = remote.compile_excludes(group["excludes"])
-    manifests = {}
-    detail = []
+    delete_follow = group["delete_policy"] in ("trash", "purge")
+
+    slots = {}
     for member in members:
-        manifest = remote.filter_manifest(remote.scan_side(member["site"], member["dir"]), patterns)
-        manifests[member["id"]] = manifest
-        detail.append({"name": member["site"]["name"], "dir": member["dir"], "files": len(manifest)})
-    baseline = load_group_baseline(db, group_id)
-    plan = decide_group(manifests, baseline, group["delete_policy"] in ("trash", "purge"))
+        slots.setdefault(member["slot"] or 1, []).append(member)
 
-    by_id = {m["id"]: m["site"]["name"] for m in members}
+    detail = []
     winners = {}
-    for rel, mid in plan["winners"].items():
-        winners.setdefault(by_id[mid], 0)
-        winners[by_id[mid]] += 1
+    result = {"update": 0, "delete": 0, "conflicts": 0, "same": 0, "delete_sample": []}
+    for slot in sorted(slots):
+        slot_members = slots[slot]
+        manifests = {}
+        for member in slot_members:
+            manifest = remote.filter_manifest(
+                remote.scan_side(member["site"], member["dir"]), patterns)
+            manifests[member["id"]] = manifest
+            detail.append({"name": member["site"]["name"], "dir": member["dir"],
+                           "files": len(manifest), "slot": slot})
+        baseline = load_group_baseline(db, group_id, slot)
+        plan = decide_group(manifests, baseline, delete_follow)
 
-    return {
-        "members": detail,
-        "winners": winners,
-        "update": len(plan["winners"]),
-        "delete": len(plan["delete"]),
-        "conflicts": len(plan["conflicts"]),
-        "same": plan["same"],
-        "delete_sample": plan["delete"][:10],
-    }
+        by_id = {m["id"]: m["site"]["name"] for m in slot_members}
+        for rel, mid in plan["winners"].items():
+            name = by_id[mid]
+            winners[name] = winners.get(name, 0) + 1
+
+        result["update"] += len(plan["winners"])
+        result["delete"] += len(plan["delete"])
+        result["conflicts"] += len(plan["conflicts"])
+        result["same"] += plan["same"]
+        result["delete_sample"].extend(plan["delete"][:10])
+
+    result["members"] = detail
+    result["winners"] = winners
+    result["delete_sample"] = result["delete_sample"][:10]
+    return result

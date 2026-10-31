@@ -56,6 +56,9 @@ button:disabled{opacity:.5;cursor:not-allowed}
 .member-row select{flex:0 0 210px;min-width:170px}
 .member-row input{flex:1;min-width:200px}
 .member-row button{padding:8px 12px;font-size:13px}
+.slot-box{border:1px solid var(--line);border-radius:9px;padding:10px 12px 2px;margin-bottom:10px;background:#fbfdfe}
+.slot-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;font-size:13px;font-weight:600;color:#31414f}
+.slot-head button{padding:3px 9px;font-size:12px}
 .withbtn{display:flex;gap:8px;align-items:center}
 .withbtn input{flex:1;min-width:120px}
 .withbtn button{padding:9px 12px;font-size:13px}
@@ -136,14 +139,24 @@ button:disabled{opacity:.5;cursor:not-allowed}
   <h2 id="ruleFormTitle">新建同步规则</h2>
   <p class="desc" id="ruleFormDesc">一条规则描述「哪个目录」和「哪个目录」之间怎么同步。双向规则会以修改时间较新的一侧为准。</p>  <div class="row">
     <div class="field"><label for="ruleName">规则名称</label><input id="ruleName" maxlength="80" placeholder="例如：照片互备"></div>
-    <div class="field small"><label for="intervalMin">执行间隔</label><input id="intervalMin" type="number" min="1" max="10080" value="10"></div>
-    <div class="field tiny"><label>&nbsp;</label><span class="hint" style="margin:9px 0 0">分钟</span></div>
-    <div class="field small"><label for="startDelay">首次运行延迟</label><input id="startDelay" type="number" min="0" max="10080" value="0"></div>
-    <div class="field tiny"><label>&nbsp;</label><span class="hint" style="margin:9px 0 0">分钟</span></div>
-    <div class="field small"><label for="retryMin">首轮失败重试</label><input id="retryMin" type="number" min="0" max="1440" value="60"></div>
-    <div class="field tiny"><label>&nbsp;</label><span class="hint" style="margin:9px 0 0">分钟</span></div>
+    <div class="field" style="flex:0 0 250px"><label for="ruleKind">执行方式</label><select id="ruleKind">
+      <option value="interval">按间隔执行</option>
+      <option value="daily">每天（自定义时间）</option>
+      <option value="weekly">每周（自定义星期和时间）</option>
+      <option value="boot">开机后执行（每次开机一次）</option>
+    </select></div>
+    <div class="field small" id="ruleIntervalWrap"><label for="intervalMin">间隔</label><input id="intervalMin" type="number" min="1" max="10080" value="10"></div>
+    <div class="field tiny" id="ruleIntervalUnit"><label>&nbsp;</label><span class="hint" style="margin:9px 0 0">分钟</span></div>
+    <div class="field small hidden" id="ruleTimeWrap"><label for="ruleTime">执行时间</label><input id="ruleTime" type="time" value="02:00"></div>
+    <div class="field small hidden" id="ruleWeekWrap"><label for="ruleWeek">星期</label><select id="ruleWeek">
+      <option value="0">周一</option><option value="1">周二</option><option value="2">周三</option>
+      <option value="3">周四</option><option value="4">周五</option><option value="5">周六</option>
+      <option value="6">周日</option>
+    </select></div>
+    <div class="field small hidden" id="ruleBootWrap"><label for="ruleBoot">开机后延迟</label><input id="ruleBoot" type="number" min="1" max="1440" value="30"></div>
+    <div class="field tiny hidden" id="ruleBootUnit"><label>&nbsp;</label><span class="hint" style="margin:9px 0 0">分钟</span></div>
   </div>
-  <p class="hint">首次运行延迟：套件启动（开机）后、以及保存或启用规则后，先等这么多分钟再跑第一轮，避免开机时所有任务一起抢带宽。首轮失败重试：第一轮没成功就按这个间隔一直重试（默认 60 分钟），直到成功一次为止，之后回到执行间隔；填 0 表示失败不额外重试。</p>
+  <p class="hint">按间隔执行：每隔 N 分钟同步一轮（默认 10 分钟）。每天 / 每周：到点跑一轮，其余时间不动。开机后执行：每次开机后先等「开机后延迟」（默认 30 分钟）再跑一轮，套件重启不会重复触发。<strong>失败会在 60 分钟后自动重试</strong>（开机后执行也照样重试），成功后回到正常排期，不会卡死在一次失败上。</p>
   <div class="row" style="margin-top:12px">
     <div class="field"><label for="siteA">A 端站点</label><select id="siteA"></select></div>
     <div class="field"><label for="dirA">A 端目录</label>
@@ -193,7 +206,7 @@ button:disabled{opacity:.5;cursor:not-allowed}
   <div class="row" style="margin-top:14px">
     <button id="saveRuleBtn">保存规则</button>
     <button class="secondary" id="cancelEditBtn" hidden>取消编辑</button>
-    <span class="hint" style="margin:0" id="ruleSaveHint">保存后按「首次运行延迟」开始第一轮；延迟填 0 则几秒内开始。</span>
+    <span class="hint" style="margin:0" id="ruleSaveHint">保存后按所选执行方式排期；按间隔执行时几秒内开始第一轮。</span>
   </div>
 </section>
 
@@ -208,23 +221,34 @@ button:disabled{opacity:.5;cursor:not-allowed}
   <p class="desc">三个及以上站点互相同步。<strong>先</strong>扫描所有站点，挑出每个文件修改时间最新的版本拉回本机，<strong>再</strong>从本机推给其余站点。本机负责中转，所以 A 站与 C 站之间不需要能互相访问。</p>
   <div class="row">
     <div class="field"><label for="gName">组名称</label><input id="gName" maxlength="80" placeholder="例如：三站照片互备"></div>
-    <div class="field small"><label for="gInterval">执行间隔</label><input id="gInterval" type="number" min="1" max="10080" value="10"></div>
-    <div class="field tiny"><label>&nbsp;</label><span class="hint" style="margin:9px 0 0">分钟</span></div>
-    <div class="field small"><label for="gStartDelay">首次运行延迟</label><input id="gStartDelay" type="number" min="0" max="10080" value="0"></div>
-    <div class="field tiny"><label>&nbsp;</label><span class="hint" style="margin:9px 0 0">分钟</span></div>
-    <div class="field small"><label for="gRetry">首轮失败重试</label><input id="gRetry" type="number" min="0" max="1440" value="60"></div>
-    <div class="field tiny"><label>&nbsp;</label><span class="hint" style="margin:9px 0 0">分钟</span></div>
+    <div class="field" style="flex:0 0 250px"><label for="gKind">执行方式</label><select id="gKind">
+      <option value="interval">按间隔执行</option>
+      <option value="daily">每天（自定义时间）</option>
+      <option value="weekly">每周（自定义星期和时间）</option>
+      <option value="boot">开机后执行（每次开机一次）</option>
+    </select></div>
+    <div class="field small" id="gIntervalWrap"><label for="gInterval">间隔</label><input id="gInterval" type="number" min="1" max="10080" value="10"></div>
+    <div class="field tiny" id="gIntervalUnit"><label>&nbsp;</label><span class="hint" style="margin:9px 0 0">分钟</span></div>
+    <div class="field small hidden" id="gTimeWrap"><label for="gTime">执行时间</label><input id="gTime" type="time" value="02:00"></div>
+    <div class="field small hidden" id="gWeekWrap"><label for="gWeek">星期</label><select id="gWeek">
+      <option value="0">周一</option><option value="1">周二</option><option value="2">周三</option>
+      <option value="3">周四</option><option value="4">周五</option><option value="5">周六</option>
+      <option value="6">周日</option>
+    </select></div>
+    <div class="field small hidden" id="gBootWrap"><label for="gBoot">开机后延迟</label><input id="gBoot" type="number" min="1" max="1440" value="30"></div>
+    <div class="field tiny hidden" id="gBootUnit"><label>&nbsp;</label><span class="hint" style="margin:9px 0 0">分钟</span></div>
   </div>
-  <p class="hint">首次运行延迟：套件启动（开机）后、以及保存或启用同步组后，先等这么多分钟再跑第一轮。首轮失败重试：第一轮没成功就按这个间隔重试，直到成功一次为止；0 表示不额外重试。</p>
+  <p class="hint">按间隔执行：每隔 N 分钟同步一轮（默认 10 分钟）。每天 / 每周：到点跑一轮，其余时间不动。开机后执行：每次开机后先等「开机后延迟」（默认 30 分钟）再跑一轮，套件重启不会重复触发。<strong>失败会在 60 分钟后自动重试</strong>，成功后回到正常排期。</p>
   <div style="margin-top:14px">
-    <label style="display:block;margin-bottom:8px">成员（至少 2 个，必须包含本机）</label>
+    <label style="display:block;margin-bottom:8px">成员（每组至少 2 个，必须包含本机；一个组里可以配多组目录，同组互相备份、不同组各管各的）</label>
     <div id="gMemberList"></div>
     <button class="secondary" id="gAddMember" style="margin-top:4px">+ 添加成员</button>
+    <button class="secondary" id="gAddSlot" style="margin-top:4px">+ 添加目录组</button>
   </div>
   <div class="row" style="margin-top:14px">
     <div class="field"><label for="gDelete">删除处理</label><select id="gDelete">
-      <option value="trash">多数成员删除后跟随删除 · 移入回收站（推荐）</option>
-      <option value="purge">多数成员删除后跟随删除 · 直接删除</option>
+      <option value="purge">多数成员删除后跟随删除 · 直接删除（默认）</option>
+      <option value="trash">多数成员删除后跟随删除 · 移入回收站（可恢复）</option>
       <option value="keep">不跟随删除 · 保留文件</option>
     </select></div>
     <div class="field"><label for="gExcludes">排除规则（每行一条）</label><textarea id="gExcludes" placeholder="*.log&#10;cache/"></textarea></div>
@@ -260,6 +284,55 @@ button:disabled{opacity:.5;cursor:not-allowed}
   <div id="groupList"><span class="muted">正在加载…</span></div>
 </section>
 
+<section class="card" id="sourceFormCard">
+  <h2 id="sourceFormTitle">新建源码备份</h2>
+  <p class="desc">只备份源码、不参与同步：把网站源码目录（本机或远程站点）按计划打成压缩包放进本机备份目录，按份数轮转。它和同步规则互不影响，同步停用或删掉也不影响备份。</p>
+  <div class="row">
+    <div class="field"><label for="srcName">任务名称</label><input id="srcName" maxlength="80" placeholder="例如：博客源码"></div>
+    <div class="field small" style="flex:0 0 200px"><label for="srcSite">源站点</label><select id="srcSite"></select></div>
+    <div class="field"><label for="srcDir">源目录</label>
+      <div class="withbtn"><input id="srcDir" placeholder="/volume1/web" spellcheck="false"><button class="secondary" id="pickSrcDir">选择</button></div>
+    </div>
+  </div>
+  <div class="row" style="margin-top:12px">
+    <div class="field"><label for="srcTarget">备份目录（本机）</label>
+      <div class="withbtn"><input id="srcTarget" placeholder="/volume1/backup/source" spellcheck="false"><button class="secondary" id="pickSrcTarget">选择</button></div>
+    </div>
+  </div>
+  <div class="row" style="margin-top:12px">
+    <div class="field" style="flex:0 0 250px"><label for="srcKind">备份方式</label><select id="srcKind">
+      <option value="daily">每天（自定义时间）</option>
+      <option value="weekly">每周（自定义星期和时间）</option>
+      <option value="interval">按间隔执行</option>
+      <option value="boot">开机后备份（每次开机一次）</option>
+    </select></div>
+    <div class="field small" id="srcTimeWrap"><label for="srcTime">执行时间</label><input id="srcTime" type="time" value="02:00"></div>
+    <div class="field small hidden" id="srcWeekWrap"><label for="srcWeek">星期</label><select id="srcWeek">
+      <option value="0">周一</option><option value="1">周二</option><option value="2">周三</option>
+      <option value="3">周四</option><option value="4">周五</option><option value="5">周六</option>
+      <option value="6">周日</option>
+    </select></div>
+    <div class="field small hidden" id="srcHourWrap"><label for="srcHour">间隔</label><input id="srcHour" type="number" min="1" max="720" value="24"></div>
+    <div class="field tiny"><label>&nbsp;</label><span class="hint" id="srcUnitHint" style="margin:9px 0 0">小时</span></div>
+    <div class="field small hidden" id="srcBootWrap"><label for="srcBoot">开机后延迟</label><input id="srcBoot" type="number" min="1" max="1440" value="30"></div>
+    <div class="field tiny hidden" id="srcBootUnit"><label>&nbsp;</label><span class="hint" style="margin:9px 0 0">分钟</span></div>
+    <div class="field" style="flex:0 0 150px;min-width:150px"><label for="srcKeep">保留份数<span class="muted" style="font-weight:400">（0=不限）</span></label><input id="srcKeep" type="number" min="0" max="999" value="7"></div>
+    <button id="srcSaveBtn">保存任务</button>
+    <button class="secondary" id="srcCancelBtn" hidden>取消</button>
+  </div>
+  <p class="hint">达到保留份数后，新备份成功时清理同一任务的最旧备份；填 <code>0</code> 不清理。到点由调度进程以 root 打包，「开机后备份」在每次开机后先等「开机后延迟」（默认 30 分钟）再跑，套件重启不会重复触发；<strong>失败会在 30 分钟后自动重试</strong>。包名 <code>任务名-日期-时间.zip</code>（远程站点为 <code>.tar.gz</code>），只清理自己产生的包。</p>
+  <div class="row" style="margin-top:12px">
+    <div class="field"><label for="srcExcludes">排除规则（每行一条，支持 * 通配）</label>
+      <textarea id="srcExcludes" placeholder="*.log&#10;cache/&#10;node_modules"></textarea></div>
+  </div>
+</section>
+
+<section class="card">
+  <h2>源码备份任务</h2>
+  <p class="desc">每个任务独立定时，源目录可以在本机，也可以是路由器 / VPS 上的网站目录；备份包始终落在本机。</p>
+  <div id="sourceList"><span class="muted">正在加载…</span></div>
+</section>
+
 <section class="card">
   <h2>同步设置</h2>
   <div class="row">
@@ -278,6 +351,7 @@ button:disabled{opacity:.5;cursor:not-allowed}
 <div class="footer">
   工作原理：<strong>两站规则</strong>拿两端清单和上次同步基线做三向比较，只传新增或修改的文件，冲突以修改时间较新者为准；<strong>多站互备</strong>每轮扫描全部成员，逐个文件挑出最新版本先拉回本机、再推给其余成员，删除需要多数成员同意（三站里两个站删了才真的删）。<br>
   <strong>压缩备份</strong>（可选）在同步成功后把本机目录打成 <code>目录名-日期-时间.zip</code> 放进另一个目录，按保留份数轮转；它是独立的时间点快照，不受同步覆盖影响。<br>
+  <strong>源码备份</strong>是独立任务：自己按「每天 / 每周 / 间隔 / 开机后」定时，源目录可以是本机，也可以是路由器或 VPS 上的网站目录（远程用 SSH 把 tar 流直接写回本机，不在对方留临时文件），包名用任务名，只清理自己产生的包，保留份数填 0 表示不限。<br>
   同一个目录不要同时出现在两站规则和同步组里，两套基线会互相打架。<br>
   套件以 DSM 服务账号运行，需要读取共享文件夹的权限，因此安装时会被加入 administrators 组。SSH 私钥仅保存在本机 <code>/var/packages/FileSync/var/keys</code>，权限 0600。<br>
   © 2026 AWA · www.akkdiy.cn。免责声明：本套件按「现状」提供，请在正式启用前用「预演」确认同步范围，并自行做好重要数据的独立备份。
@@ -349,9 +423,10 @@ button:disabled{opacity:.5;cursor:not-allowed}
 const CSRF = '__CSRF__', DSM_TOKEN = __SYNO_TOKEN__;
 const PREVIEW = CSRF === 'preview';
 const $ = id => document.getElementById(id);
-let state = { sites: [], rules: [], groups: [], keys: [], settings: {} };
-let editingRule = null, editingSite = null, editingGroup = null;
+let state = { sites: [], rules: [], groups: [], source_backups: [], keys: [], settings: {} };
+let editingRule = null, editingSite = null, editingGroup = null, editingSource = null;
 let groupMembers = [];
+let srcFormReady = false;
 let userPickedB = false;  // 用户是否手动选过 B 端站点，选过就不再自动纠正
 
 function esc(s) {
@@ -685,9 +760,7 @@ function renderRules() {
       : r.last_status === 'running' ? '<span class="badge run">同步中</span>' : '<span class="badge off">等待首轮</span>';
     const next = r.next_run ? fmtTime(r.next_run) : '未排期';
     const arrow = r.mode === 'a2b' ? '→' : r.mode === 'b2a' ? '←' : '⇄';
-    const schedule = '每 ' + r.interval_min + ' 分钟'
-      + (r.start_delay_min ? ' · 首轮延迟 ' + r.start_delay_min + ' 分钟' : '')
-      + (r.retry_min ? ' · 首轮失败重试 ' + r.retry_min + ' 分钟' : ' · 失败不重试');
+    const schedule = scheduleText(r);
     const backup = r.backup_enabled
       ? '<br>压缩备份：<code>' + esc(r.backup_dir || '（未填目录）') + '</code> · 同步成功后 ' + (r.backup_delay_min == null ? 5 : r.backup_delay_min) +
         ' 分钟 · 每 ' + r.backup_interval_hour + ' 小时 · 保留 ' + r.backup_keep + ' 份 · ' +
@@ -719,6 +792,11 @@ function renderRules() {
 // ---------------------------------------------------------------------------
 // 多站互备
 // ---------------------------------------------------------------------------
+// 成员按「目录组」分区：同组互相备份，不同组各管各的（一个组能照看多个目录）
+function groupSlots() {
+  return [...new Set(groupMembers.map(m => m.slot || 1))].sort((a, b) => a - b);
+}
+
 function renderGroupMembers() {
   const box = $('gMemberList');
   box.replaceChildren();
@@ -726,31 +804,51 @@ function renderGroupMembers() {
     box.innerHTML = '<span class="muted">还没有成员，点下面的按钮添加。</span>';
     return;
   }
-  groupMembers.forEach((member, idx) => {
-    const row = document.createElement('div');
-    row.className = 'member-row';
-    const options = state.sites.map(s =>
-      '<option value="' + esc(s.id) + '"' + (s.id === member.site_id ? ' selected' : '') + '>' +
-      esc(s.name) + '</option>').join('');
-    row.innerHTML = '<select class="m-site">' + options + '</select>' +
-      '<input class="m-dir" value="' + esc(member.dir || '') + '" placeholder="/volume1/photo 或 /mnt/data" spellcheck="false">' +
-      '<button class="secondary m-pick">选择目录</button>' +
-      '<button class="secondary m-del">移除</button>';
-    row.querySelector('.m-site').addEventListener('change', e => { groupMembers[idx].site_id = e.target.value; });
-    row.querySelector('.m-dir').addEventListener('input', e => { groupMembers[idx].dir = e.target.value; });
-    row.querySelector('.m-pick').addEventListener('click', () => {
-      const dirInput = row.querySelector('.m-dir');
-      openDirPicker(member.site_id, dirInput.value, path => {
-        groupMembers[idx].dir = path;
-        dirInput.value = path;
+  const slots = groupSlots();
+  for (const slot of slots) {
+    const panel = document.createElement('div');
+    panel.className = 'slot-box';
+    const head = document.createElement('div');
+    head.className = 'slot-head';
+    head.innerHTML = '<span>第 ' + slot + ' 组目录</span>' +
+      (slots.length > 1 ? '<button class="danger slot-del">删除该组</button>' : '');
+    panel.append(head);
+    if (slots.length > 1) {
+      head.querySelector('.slot-del').addEventListener('click', () => {
+        if (!confirm('删除第 ' + slot + ' 组目录的所有成员？保存后生效。')) return;
+        groupMembers = groupMembers.filter(m => (m.slot || 1) !== slot);
+        renderGroupMembers();
       });
+    }
+
+    groupMembers.forEach((member, idx) => {
+      if ((member.slot || 1) !== slot) return;
+      const row = document.createElement('div');
+      row.className = 'member-row';
+      const options = state.sites.map(s =>
+        '<option value="' + esc(s.id) + '"' + (s.id === member.site_id ? ' selected' : '') + '>' +
+        esc(s.name) + '</option>').join('');
+      row.innerHTML = '<select class="m-site">' + options + '</select>' +
+        '<input class="m-dir" value="' + esc(member.dir || '') + '" placeholder="/volume1/photo 或 /mnt/data" spellcheck="false">' +
+        '<button class="secondary m-pick">选择目录</button>' +
+        '<button class="secondary m-del">移除</button>';
+      row.querySelector('.m-site').addEventListener('change', e => { groupMembers[idx].site_id = e.target.value; });
+      row.querySelector('.m-dir').addEventListener('input', e => { groupMembers[idx].dir = e.target.value; });
+      row.querySelector('.m-pick').addEventListener('click', () => {
+        const dirInput = row.querySelector('.m-dir');
+        openDirPicker(member.site_id, dirInput.value, path => {
+          groupMembers[idx].dir = path;
+          dirInput.value = path;
+        });
+      });
+      row.querySelector('.m-del').addEventListener('click', () => {
+        groupMembers.splice(idx, 1);
+        renderGroupMembers();
+      });
+      panel.append(row);
     });
-    row.querySelector('.m-del').addEventListener('click', () => {
-      groupMembers.splice(idx, 1);
-      renderGroupMembers();
-    });
-    box.append(row);
-  });
+    box.append(panel);
+  }
 }
 
 function resetGroupForm() {
@@ -759,10 +857,13 @@ function resetGroupForm() {
   $('gSaveBtn').textContent = '保存同步组';
   $('gCancelBtn').hidden = true;
   $('gName').value = '';
+  $('gKind').value = 'interval';
   $('gInterval').value = '10';
-  $('gStartDelay').value = '0';
-  $('gRetry').value = '60';
-  $('gDelete').value = 'trash';
+  $('gTime').value = '02:00';
+  $('gWeek').value = '0';
+  $('gBoot').value = '30';
+  syncGroupSchedule();
+  $('gDelete').value = 'purge';
   $('gExcludes').value = '';
   $('gBackupEnabled').value = '0';
   $('gBackupDir').value = '';
@@ -773,8 +874,8 @@ function resetGroupForm() {
   const local = state.sites.find(s => s.kind === 'local');
   const others = state.sites.filter(s => s.kind !== 'local');
   groupMembers = [];
-  if (local) groupMembers.push({ site_id: local.id, dir: '' });
-  others.slice(0, 2).forEach(s => groupMembers.push({ site_id: s.id, dir: '' }));
+  if (local) groupMembers.push({ site_id: local.id, dir: '', slot: 1 });
+  others.slice(0, 2).forEach(s => groupMembers.push({ site_id: s.id, dir: '', slot: 1 }));
   renderGroupMembers();
 }
 
@@ -784,9 +885,12 @@ function editGroup(group) {
   $('gSaveBtn').textContent = '保存修改';
   $('gCancelBtn').hidden = false;
   $('gName').value = group.name || '';
+  $('gKind').value = group.schedule_kind || 'interval';
   $('gInterval').value = group.interval_min;
-  $('gStartDelay').value = group.start_delay_min || 0;
-  $('gRetry').value = group.retry_min == null ? 60 : group.retry_min;
+  $('gTime').value = group.run_time || '02:00';
+  $('gWeek').value = String(group.weekday == null ? 0 : group.weekday);
+  $('gBoot').value = group.boot_delay_min || 30;
+  syncGroupSchedule();
   $('gDelete').value = group.delete_policy;
   $('gExcludes').value = group.excludes || '';
   $('gBackupEnabled').value = group.backup_enabled ? '1' : '0';
@@ -795,12 +899,42 @@ function editGroup(group) {
   $('gBackupHour').value = group.backup_interval_hour || 24;
   $('gBackupDelay').value = group.backup_delay_min == null ? 5 : group.backup_delay_min;
   syncBackupOpts();
-  groupMembers = (group.members || []).map(m => ({ site_id: m.site_id, dir: m.dir }));
+  groupMembers = (group.members || []).map(m => ({ site_id: m.site_id, dir: m.dir, slot: m.slot || 1 }));
   renderGroupMembers();
   $('groupFormCard').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 // 压缩备份的四个字段只在启用时展开，避免新建规则时被一堆不用的输入框淹没
+// 执行方式决定显示哪个输入框：间隔 / 执行时间 / 星期
+function syncRuleSchedule() {
+  const kind = $('ruleKind').value;
+  $('ruleIntervalWrap').classList.toggle('hidden', kind !== 'interval');
+  $('ruleIntervalUnit').classList.toggle('hidden', kind !== 'interval');
+  $('ruleTimeWrap').classList.toggle('hidden', !(kind === 'daily' || kind === 'weekly'));
+  $('ruleWeekWrap').classList.toggle('hidden', kind !== 'weekly');
+  $('ruleBootWrap').classList.toggle('hidden', kind !== 'boot');
+  $('ruleBootUnit').classList.toggle('hidden', kind !== 'boot');
+}
+
+function syncGroupSchedule() {
+  const kind = $('gKind').value;
+  $('gIntervalWrap').classList.toggle('hidden', kind !== 'interval');
+  $('gIntervalUnit').classList.toggle('hidden', kind !== 'interval');
+  $('gTimeWrap').classList.toggle('hidden', !(kind === 'daily' || kind === 'weekly'));
+  $('gWeekWrap').classList.toggle('hidden', kind !== 'weekly');
+  $('gBootWrap').classList.toggle('hidden', kind !== 'boot');
+  $('gBootUnit').classList.toggle('hidden', kind !== 'boot');
+}
+
+// 列表里显示的执行方式：按间隔 / 每天 02:00 / 每周一 03:30 / 开机后
+function scheduleText(row) {
+  const kind = row.schedule_kind || 'interval';
+  if (kind === 'boot') return '开机后 ' + (row.boot_delay_min || 30) + ' 分钟';
+  if (kind === 'daily') return '每天 ' + (row.run_time || '02:00');
+  if (kind === 'weekly') return '每' + (WEEKDAYS[row.weekday] || '周一') + ' ' + (row.run_time || '02:00');
+  return '每 ' + row.interval_min + ' 分钟';
+}
+
 function syncBackupOpts() {
   $('backupOpts').classList.toggle('hidden', $('backupEnabled').value !== '1');
   $('gBackupOpts').classList.toggle('hidden', $('gBackupEnabled').value !== '1');
@@ -808,20 +942,28 @@ function syncBackupOpts() {
 
 async function saveGroup() {
   const members = groupMembers
-    .map(m => ({ site_id: m.site_id, dir: (m.dir || '').trim() }))
+    .map(m => ({ site_id: m.site_id, dir: (m.dir || '').trim(), slot: m.slot || 1 }))
     .filter(m => m.site_id && m.dir);
   if (members.length < 2) return notice('至少需要 2 个填好目录的成员', 'error');
-  const hasLocal = members.some(m => {
-    const s = state.sites.find(x => x.id === m.site_id);
-    return s && s.kind === 'local';
-  });
-  if (!hasLocal) return notice('必须包含本机成员——本机负责中转，否则 A 站和 C 站之间传不了', 'error');
+  const bySlot = {};
+  for (const m of members) (bySlot[m.slot] = bySlot[m.slot] || []).push(m);
+  for (const slot of Object.keys(bySlot)) {
+    if (bySlot[slot].length < 2) return notice('第 ' + slot + ' 组目录至少需要 2 个填好目录的成员', 'error');
+    if (bySlot[slot].length > 8) return notice('第 ' + slot + ' 组目录最多 8 个站点', 'error');
+    const hasLocal = bySlot[slot].some(m => {
+      const s = state.sites.find(x => x.id === m.site_id);
+      return s && s.kind === 'local';
+    });
+    if (!hasLocal) return notice('第 ' + slot + ' 组目录必须包含本机成员——本机负责中转，否则其余站点之间传不了', 'error');
+  }
   const payload = {
     id: editingGroup,
     name: $('gName').value.trim(),
+    schedule_kind: $('gKind').value,
+    run_time: $('gTime').value || '02:00',
+    weekday: Number($('gWeek').value || 0),
+    boot_delay_min: Number($('gBoot').value || 30),
     interval_min: Number($('gInterval').value),
-    start_delay_min: Number($('gStartDelay').value || 0),
-    retry_min: Number($('gRetry').value || 0),
     delete_policy: $('gDelete').value,
     excludes: $('gExcludes').value,
     backup_enabled: $('gBackupEnabled').value,
@@ -868,11 +1010,11 @@ function renderGroups() {
     const badge = g.last_status === 'ok' ? '<span class="badge ok">正常</span>'
       : g.last_status === 'error' ? '<span class="badge err">失败</span>'
       : g.last_status === 'running' ? '<span class="badge run">同步中</span>' : '<span class="badge off">等待首轮</span>';
+    const slotCount = new Set(g.members.map(m => m.slot || 1)).size;
     const chips = g.members.map(m =>
-      '<span class="member-chip">' + esc(m.site_name) + ' <code>' + esc(m.dir) + '</code></span>').join('');
-    const schedule = '每 ' + g.interval_min + ' 分钟'
-      + (g.start_delay_min ? ' · 首轮延迟 ' + g.start_delay_min + ' 分钟' : '')
-      + (g.retry_min ? ' · 首轮失败重试 ' + g.retry_min + ' 分钟' : ' · 失败不重试');
+      '<span class="member-chip">' + (slotCount > 1 ? '[' + (m.slot || 1) + '] ' : '') +
+      esc(m.site_name) + ' <code>' + esc(m.dir) + '</code></span>').join('');
+    const schedule = scheduleText(g);
     const backup = g.backup_enabled
       ? '<br>压缩备份：<code>' + esc(g.backup_dir || '（未填目录）') + '</code> · 同步成功后 ' + (g.backup_delay_min == null ? 5 : g.backup_delay_min) +
         ' 分钟 · 每 ' + g.backup_interval_hour + ' 小时 · 保留 ' + g.backup_keep + ' 份 · ' +
@@ -882,7 +1024,8 @@ function renderGroups() {
     el.innerHTML =
       '<div><h3>' + esc(g.name) + badge + (g.enabled ? '' : '<span class="badge off">已停用</span>') + '</h3>' +
       '<div class="member-list">' + chips + '</div>' +
-      '<div class="meta" style="margin-top:6px">' + g.members.length + ' 个站点 · ' + schedule + ' · 删除：' +
+      '<div class="meta" style="margin-top:6px">' + (slotCount > 1 ? slotCount + ' 组目录 · ' : '') +
+      g.members.length + ' 个成员 · ' + schedule + ' · 删除：' +
       esc(deleteText(g.delete_policy)) + backup + '<br>上次：' + fmtTime(g.last_run) + ' · ' + esc(g.last_message || '尚未执行') +
       '<br>下次：' + esc(g.next_run ? fmtTime(g.next_run) : '未排期') + '</div></div>' +
       '<div class="ops">' +
@@ -954,6 +1097,180 @@ async function groupAction(act, group, btn) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// 源码备份：独立定时，源目录可以是本机或远程站点
+// ---------------------------------------------------------------------------
+const WEEKDAYS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+
+function sourceScheduleText(t) {
+  if (t.schedule_kind === 'interval') return '每 ' + t.interval_hour + ' 小时';
+  if (t.schedule_kind === 'boot') return '开机后 ' + (t.boot_delay_min || 30) + ' 分钟';
+  if (t.schedule_kind === 'weekly') return '每' + (WEEKDAYS[t.weekday] || '周一') + ' ' + (t.run_time || '02:00');
+  return '每天 ' + (t.run_time || '02:00');
+}
+
+function renderSourceSites(selected) {
+  const sel = $('srcSite');
+  const keep = selected || sel.value;
+  sel.innerHTML = state.sites.map(s =>
+    '<option value="' + esc(s.id) + '">' + esc(s.name) + '</option>').join('');
+  if (keep && state.sites.some(s => s.id === keep)) sel.value = keep;
+}
+
+// 备份方式决定要显示哪个输入框：时间 / 星期 / 间隔
+function syncSourceSchedule() {
+  const kind = $('srcKind').value;
+  $('srcTimeWrap').classList.toggle('hidden', !(kind === 'daily' || kind === 'weekly'));
+  $('srcWeekWrap').classList.toggle('hidden', kind !== 'weekly');
+  $('srcHourWrap').classList.toggle('hidden', kind !== 'interval');
+  $('srcUnitHint').classList.toggle('hidden', kind !== 'interval');
+  $('srcBootWrap').classList.toggle('hidden', kind !== 'boot');
+  $('srcBootUnit').classList.toggle('hidden', kind !== 'boot');
+}
+
+function resetSourceForm() {
+  editingSource = null;
+  $('sourceFormTitle').textContent = '新建源码备份';
+  $('srcSaveBtn').textContent = '保存任务';
+  $('srcCancelBtn').hidden = true;
+  $('srcName').value = '';
+  $('srcDir').value = '';
+  $('srcTarget').value = '';
+  $('srcKind').value = 'daily';
+  $('srcTime').value = '02:00';
+  $('srcWeek').value = '0';
+  $('srcBoot').value = '30';
+  $('srcHour').value = '24';
+  $('srcKeep').value = '7';
+  $('srcExcludes').value = '';
+  const local = state.sites.find(s => s.kind === 'local');
+  renderSourceSites(local ? local.id : '');
+  syncSourceSchedule();
+}
+
+function editSourceBackup(task) {
+  editingSource = task.id;
+  $('sourceFormTitle').textContent = '编辑源码备份';
+  $('srcSaveBtn').textContent = '保存修改';
+  $('srcCancelBtn').hidden = false;
+  $('srcName').value = task.name || '';
+  renderSourceSites(task.site_id);
+  $('srcDir').value = task.src_dir || '';
+  $('srcTarget').value = task.target_dir || '';
+  $('srcKind').value = task.schedule_kind || 'daily';
+  $('srcTime').value = task.run_time || '02:00';
+  $('srcWeek').value = String(task.weekday == null ? 0 : task.weekday);
+  $('srcBoot').value = task.boot_delay_min || 30;
+  $('srcHour').value = task.interval_hour || 24;
+  $('srcKeep').value = task.keep == null ? 7 : task.keep;
+  $('srcExcludes').value = task.excludes || '';
+  syncSourceSchedule();
+  $('sourceFormCard').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+async function saveSourceBackup() {
+  const payload = {
+    id: editingSource,
+    name: $('srcName').value.trim(),
+    site_id: $('srcSite').value,
+    src_dir: $('srcDir').value.trim(),
+    target_dir: $('srcTarget').value.trim(),
+    schedule_kind: $('srcKind').value,
+    run_time: $('srcTime').value || '02:00',
+    weekday: Number($('srcWeek').value || 0),
+    boot_delay_min: Number($('srcBoot').value || 30),
+    interval_hour: Number($('srcHour').value || 24),
+    keep: Number($('srcKeep').value === '' ? 7 : $('srcKeep').value),
+    excludes: $('srcExcludes').value
+  };
+  if (!payload.name) return notice('请填写任务名称', 'error');
+  if (!payload.site_id) return notice('请选择源站点', 'error');
+  if (!payload.src_dir.startsWith('/')) return notice('源目录必须是以 / 开头的绝对路径', 'error');
+  if (!payload.target_dir.startsWith('/')) return notice('备份目录必须是以 / 开头的绝对路径', 'error');
+  const btn = $('srcSaveBtn'); btn.disabled = true;
+  try {
+    const d = await api('save_source_backup', payload);
+    notice((editingSource ? '源码备份任务已更新。' : '源码备份任务已保存。') + nextRunText(d.next_run), 'good');
+    resetSourceForm(); await load();
+  } catch (e) { notice(e.message, 'error'); }
+  finally { btn.disabled = false; }
+}
+
+function renderSourceBackups() {
+  const box = $('sourceList');
+  box.replaceChildren();
+  if (!state.source_backups.length) {
+    box.innerHTML = '<span class="muted">还没有源码备份任务。在上面填任务名称、选源目录和备份目录，再选备份方式即可。</span>';
+    return;
+  }
+  for (const t of state.source_backups) {
+    const el = document.createElement('div');
+    el.className = 'rule';
+    const badge = !t.enabled ? '<span class="badge off">已停用</span>'
+      : t.last_status === 'ok' ? '<span class="badge ok">正常</span>'
+      : t.last_status === 'error' ? '<span class="badge err">失败</span>'
+      : '<span class="badge off">等待首次备份</span>';
+    const packs = (t.packs || []).slice(0, 3).map(p =>
+      '<code>' + esc(p.name) + '</code> · ' + esc(p.size_text) + ' · ' + esc(p.time)).join('<br>');
+    el.innerHTML =
+      '<div><h3>' + esc(t.name) + badge + '</h3>' +
+      '<div class="meta">源：' + esc(siteLabel(t.site_id)) + ' <code>' + esc(t.src_dir) + '</code>' +
+      ' → 备份：<code>' + esc(t.target_dir) + '</code><br>' +
+      esc(sourceScheduleText(t)) + ' · 保留 ' + (t.keep > 0 ? t.keep + ' 份' : '不限份数') +
+      ' · 上次：' + fmtTime(t.last_run) + ' · ' + esc(t.last_msg || '尚未备份') + '<br>' +
+      '下次：' + esc(t.next_run ? fmtTime(t.next_run) : '未排期') +
+      (packs ? '<br>最近备份：<br>' + packs : '') + '</div></div>' +
+      '<div class="ops">' +
+      '<button data-act="run">立即备份</button>' +
+      '<button class="secondary" data-act="logs">日志</button>' +
+      '<button class="secondary" data-act="edit">编辑</button>' +
+      '<button class="secondary" data-act="toggle">' + (t.enabled ? '停用' : '启用') + '</button>' +
+      '<button class="danger" data-act="del">删除</button></div>';
+    el.querySelectorAll('button[data-act]').forEach(btn => {
+      btn.addEventListener('click', () => sourceAction(btn.dataset.act, t, btn));
+    });
+    box.append(el);
+  }
+}
+
+async function sourceAction(act, task, btn) {
+  try {
+    if (act === 'run') {
+      btn.disabled = true; btn.textContent = '排队中…';
+      await api('run_source_backup', { id: task.id });
+      notice('已排入备份队列，调度器会在 20 秒内以 root 权限打包，稍后自动刷新结果。');
+      setTimeout(load, 25000);
+    } else if (act === 'logs') {
+      $('logTitle').textContent = '备份日志 · ' + task.name;
+      $('logBody').textContent = '加载中…';
+      $('logModal').classList.add('open');
+      try {
+        const d = await api('logs', { id: 'srcbak:' + task.id });
+        $('logBody').innerHTML = (d.runs || []).map(r =>
+          '<div class="run" style="white-space:pre-wrap;word-break:break-all"><span class="' + (r.status === 'error' ? 'e' : r.status === 'ok' ? 'g' : '') + '">[' + esc(r.started) + '] ' +
+          esc(r.status === 'ok' ? '成功' : r.status === 'error' ? '失败' : '进行中') + ' ' + esc(r.message) + '</span></div>'
+        ).join('') || '暂无记录';
+      } catch (e) {
+        $('logBody').textContent = '日志加载失败：' + e.message;
+      }
+    } else if (act === 'edit') {
+      editSourceBackup(task);
+    } else if (act === 'toggle') {
+      await api('toggle_source_backup', { id: task.id, enabled: !task.enabled });
+      await load();
+    } else if (act === 'del') {
+      if (!confirm('删除源码备份任务「' + task.name + '」？已经打好的备份包不会被删除，只是不再自动备份。')) return;
+      await api('delete_source_backup', { id: task.id });
+      notice('源码备份任务已删除，备份包保留在备份目录里。');
+      await load();
+    }
+  } catch (e) {
+    notice(e.message, 'error');
+  } finally {
+    if (btn && act === 'run') { btn.disabled = false; btn.textContent = '立即备份'; }
+  }
+}
+
 function showRootWarning(uid) {
   const box = $('rootWarn');
   if (uid == null || uid === 0) { box.hidden = true; box.textContent = ''; return; }
@@ -972,6 +1289,7 @@ async function load() {
     state.sites = data.sites || [];
     state.rules = data.rules || [];
     state.groups = data.groups || [];
+    state.source_backups = data.source_backups || [];
     state.keys = data.keys || [];
     state.settings = data.settings || {};
     $('verTag').textContent = 'v' + (data.version || '');
@@ -983,7 +1301,10 @@ async function load() {
     $('conflictCopy').value = state.settings.conflict_copy === '0' ? '0' : '1';
     showRootWarning(data.worker && data.worker.uid);
     renderSites(); renderRuleSelects(); renderRules(); renderGroups();
+    renderSourceSites(); renderSourceBackups();
     if (!groupMembers.length) resetGroupForm();
+    // 只在首次加载时初始化表单：20 秒轮询不能把用户正在填的内容清掉
+    if (!srcFormReady) { resetSourceForm(); srcFormReady = true; }
   } catch (e) { notice(e.message, 'error'); }
 }
 
@@ -1046,9 +1367,12 @@ function editRule(rule) {
   $('dirB').value = rule.dir_b;
   $('ruleMode').value = rule.mode;
   $('deletePolicy').value = rule.delete_policy;
+  $('ruleKind').value = rule.schedule_kind || 'interval';
   $('intervalMin').value = rule.interval_min;
-  $('startDelay').value = rule.start_delay_min || 0;
-  $('retryMin').value = rule.retry_min == null ? 60 : rule.retry_min;
+  $('ruleTime').value = rule.run_time || '02:00';
+  $('ruleWeek').value = String(rule.weekday == null ? 0 : rule.weekday);
+  $('ruleBoot').value = rule.boot_delay_min || 30;
+  syncRuleSchedule();
   $('ruleExcludes').value = rule.excludes || '';
   $('backupEnabled').value = rule.backup_enabled ? '1' : '0';
   $('backupDir').value = rule.backup_dir || '';
@@ -1067,7 +1391,9 @@ function resetRuleForm() {
   $('ruleName').value = ''; $('dirA').value = ''; $('dirB').value = '';
   $('ruleMode').value = 'both'; $('deletePolicy').value = 'trash';
   $('intervalMin').value = '10'; $('ruleExcludes').value = '';
-  $('startDelay').value = '0'; $('retryMin').value = '60';
+  $('ruleKind').value = 'interval'; $('ruleTime').value = '02:00'; $('ruleWeek').value = '0';
+  $('ruleBoot').value = '30';
+  syncRuleSchedule();
   $('backupEnabled').value = '0'; $('backupDir').value = '';
   $('backupKeep').value = '7'; $('backupHour').value = '24'; $('backupDelay').value = '5';
   syncBackupOpts();
@@ -1087,9 +1413,11 @@ async function saveRule() {
     dir_b: $('dirB').value.trim(),
     mode: $('ruleMode').value,
     delete_policy: $('deletePolicy').value,
+    schedule_kind: $('ruleKind').value,
+    run_time: $('ruleTime').value || '02:00',
+    weekday: Number($('ruleWeek').value || 0),
+    boot_delay_min: Number($('ruleBoot').value || 30),
     interval_min: Number($('intervalMin').value),
-    start_delay_min: Number($('startDelay').value || 0),
-    retry_min: Number($('retryMin').value || 0),
     excludes: $('ruleExcludes').value,
     backup_enabled: $('backupEnabled').value,
     backup_dir: $('backupDir').value.trim(),
@@ -1246,9 +1574,21 @@ $('siteA').addEventListener('change', () => {
 });
 $('saveRuleBtn').addEventListener('click', saveRule);
 $('gAddMember').addEventListener('click', () => {
-  const used = new Set(groupMembers.map(m => m.site_id));
+  const slots = groupSlots();
+  const slot = slots.length ? slots[slots.length - 1] : 1;  // 加到最后一组
+  const used = new Set(groupMembers.filter(m => (m.slot || 1) === slot).map(m => m.site_id));
   const site = state.sites.find(s => !used.has(s.id)) || state.sites[0];
-  groupMembers.push({ site_id: site ? site.id : '', dir: '' });
+  groupMembers.push({ site_id: site ? site.id : '', dir: '', slot: slot });
+  renderGroupMembers();
+});
+$('gAddSlot').addEventListener('click', () => {
+  const slots = groupSlots();
+  const next = (slots.length ? slots[slots.length - 1] : 0) + 1;
+  if (next > 9) return notice('最多 9 组目录', 'error');
+  const local = state.sites.find(s => s.kind === 'local');
+  if (local) groupMembers.push({ site_id: local.id, dir: '', slot: next });
+  const remote = state.sites.find(s => s.kind !== 'local');
+  if (remote) groupMembers.push({ site_id: remote.id, dir: '', slot: next });
   renderGroupMembers();
 });
 $('gSaveBtn').addEventListener('click', saveGroup);
@@ -1297,6 +1637,10 @@ $('pickDirB').addEventListener('click', () => {
   openDirPicker($('siteB').value, $('dirB').value, path => { $('dirB').value = path; });
 });
 
+// 执行方式切换：间隔 / 每天 / 每周 / 开机后
+$('ruleKind').addEventListener('change', syncRuleSchedule);
+$('gKind').addEventListener('change', syncGroupSchedule);
+
 // 压缩备份：开关展开字段，备份目录只能选本机的（打包在本机执行）
 $('backupEnabled').addEventListener('change', syncBackupOpts);
 $('gBackupEnabled').addEventListener('change', syncBackupOpts);
@@ -1307,6 +1651,15 @@ function pickLocalDir(inputId) {
 }
 $('pickBackupDir').addEventListener('click', () => pickLocalDir('backupDir'));
 $('gPickBackupDir').addEventListener('click', () => pickLocalDir('gBackupDir'));
+
+// 源码备份：源目录跟随所选站点（本机/远程都能选），备份目录固定是本机
+$('pickSrcDir').addEventListener('click', () => {
+  openDirPicker($('srcSite').value, $('srcDir').value, path => { $('srcDir').value = path; });
+});
+$('pickSrcTarget').addEventListener('click', () => pickLocalDir('srcTarget'));
+$('srcKind').addEventListener('change', syncSourceSchedule);
+$('srcSaveBtn').addEventListener('click', saveSourceBackup);
+$('srcCancelBtn').addEventListener('click', resetSourceForm);
 
 // 预览模式的假数据，仅用于本地打开页面时查看界面
 function previewApi(action, data) {
@@ -1322,34 +1675,60 @@ function previewApi(action, data) {
     ],
     keys: [{ id: 'k1', name: '同步专用', public_line: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleKeyForPreviewOnly filesync@dsm' }],
     groups: [
-      { id: 'g1', name: '三站照片互备', delete_policy: 'trash', excludes: '', interval_min: 10, enabled: 1,
-        start_delay_min: 5, retry_min: 60,
-        backup_enabled: 1, backup_dir: '/volume1/backup/photo', backup_keep: 7, backup_interval_hour: 24,
+      { id: 'g1', name: '博客三目录互备', delete_policy: 'purge', excludes: '*.log\ncache/',
+        schedule_kind: 'interval', run_time: '02:00', weekday: 0, interval_min: 10, enabled: 1,
+        start_delay_min: 0, retry_min: 60,
+        backup_enabled: 1, backup_dir: '/volume1/backup/web', backup_keep: 7, backup_interval_hour: 24,
         backup_delay_min: 5, backup_due_at: iso(-1),
-        backup_last: iso(180), backup_msg: '成功：photo-20261030-020000.zip（1.8 GB，保留 7 份）',
+        backup_last: iso(180), backup_msg: '成功：web-20261030-020000.zip（1.8 GB，保留 7 份）',
         next_run: iso(-8), last_run: iso(6), last_status: 'ok',
         last_message: '拉回 2，推送 4，删除 0，冲突 0',
         members: [
-          { id: 'm1', site_id: 'local', dir: '/volume1/photo', site_name: '本机 · DiskStation', site_kind: 'local' },
-          { id: 'm2', site_id: 'a', dir: '/mnt/usb/photo', site_name: 'A 站 · 路由器', site_kind: 'openwrt' },
-          { id: 'm3', site_id: 'c', dir: '/var/www/photo', site_name: 'C 站 · 日本 VPS', site_kind: 'linux' }
+          { id: 'm1', site_id: 'local', dir: '/volume1/web/usr', slot: 1, site_name: '本机 · DiskStation', site_kind: 'local' },
+          { id: 'm2', site_id: 'a', dir: '/wwwroot/web.akkdiy.cn/usr', slot: 1, site_name: 'A 站 · 路由器', site_kind: 'openwrt' },
+          { id: 'm3', site_id: 'c', dir: '/var/www/usr', slot: 1, site_name: 'C 站 · 日本 VPS', site_kind: 'linux' },
+          { id: 'm4', site_id: 'local', dir: '/volume1/web/tu', slot: 2, site_name: '本机 · DiskStation', site_kind: 'local' },
+          { id: 'm5', site_id: 'a', dir: '/wwwroot/web.akkdiy.cn/tu', slot: 2, site_name: 'A 站 · 路由器', site_kind: 'openwrt' },
+          { id: 'm6', site_id: 'c', dir: '/var/www/tu', slot: 2, site_name: 'C 站 · 日本 VPS', site_kind: 'linux' }
         ] }
     ],
+    source_backups: [
+      { id: 's1', name: '博客源码', site_id: 'local', src_dir: '/volume1/web/blog',
+        target_dir: '/volume1/backup/source', schedule_kind: 'daily', run_time: '02:00',
+        weekday: 0, interval_hour: 24, keep: 7, excludes: '*.log\ncache/', enabled: 1,
+        next_run: iso(-300), last_run: iso(720), last_status: 'ok',
+        last_msg: '成功：博客源码-20261030-020000.zip（86 MB，保留 7 份）',
+        packs: [
+          { name: '博客源码-20261030-020000.zip', size: 90177536, size_text: '86 MB', time: '10-30 02:00' },
+          { name: '博客源码-20261029-020000.zip', size: 89128960, size_text: '85 MB', time: '10-29 02:00' }
+        ] },
+      { id: 's2', name: 'VPS 站点源码', site_id: 'c', src_dir: '/var/www/site',
+        target_dir: '/volume1/backup/source', schedule_kind: 'weekly', run_time: '03:30',
+        weekday: 5, interval_hour: 24, keep: 4, excludes: '', enabled: 1,
+        next_run: iso(-1440), last_run: iso(2880), last_status: 'error',
+        last_msg: '失败：远程打包失败：ssh: connect to host jp.example.com port 22: Connection timed out',
+        packs: [] }
+    ],
     rules: [
-      { id: 'r1', name: '照片互备', site_a: 'local', dir_a: '/volume1/photo', site_b: 'a', dir_b: '/mnt/usb/photo', mode: 'both', delete_policy: 'trash', excludes: '', interval_min: 10, enabled: 1,
+      { id: 'r1', name: '照片互备', site_a: 'local', dir_a: '/volume1/photo', site_b: 'a', dir_b: '/mnt/usb/photo', mode: 'both', delete_policy: 'trash', excludes: '',
+        schedule_kind: 'interval', run_time: '02:00', weekday: 0, interval_min: 10, enabled: 1,
         start_delay_min: 0, retry_min: 60, backup_enabled: 0, backup_dir: '', backup_keep: 7, backup_interval_hour: 24, backup_last: '', backup_msg: '',
         next_run: iso(-6), last_run: iso(4), last_status: 'ok', last_message: 'A→B 3，B→A 1，删除 0，冲突 0' },
-      { id: 'r2', name: '网站文件回传', site_a: 'c', dir_a: '/var/www/site', site_b: 'local', dir_b: '/volume1/web/site', mode: 'b2a', delete_policy: 'trash', excludes: '*.log', interval_min: 30, enabled: 1,
+      { id: 'r2', name: '网站文件回传', site_a: 'c', dir_a: '/var/www/site', site_b: 'local', dir_b: '/volume1/web/site', mode: 'b2a', delete_policy: 'trash', excludes: '*.log',
+        schedule_kind: 'daily', run_time: '03:30', weekday: 0, interval_min: 30, enabled: 1,
         start_delay_min: 10, retry_min: 60, backup_enabled: 1, backup_dir: '/volume1/backup/web', backup_keep: 14, backup_interval_hour: 12,
         backup_last: iso(300), backup_msg: '成功：site-20261030-080000.zip（320 MB，保留 14 份，清理 1 份旧包）',
         next_run: iso(-22), last_run: iso(31), last_status: 'error', last_message: '连接超时（45 秒）' },
-      { id: 'r3', name: '路由器配置备份', site_a: 'a', dir_a: '/etc/config', site_b: 'local', dir_b: '/volume1/backup/openwrt', mode: 'a2b', delete_policy: 'keep', excludes: '', interval_min: 60, enabled: 1,
+      { id: 'r3', name: '路由器配置备份', site_a: 'a', dir_a: '/etc/config', site_b: 'local', dir_b: '/volume1/backup/openwrt', mode: 'a2b', delete_policy: 'keep', excludes: '',
+        schedule_kind: 'weekly', run_time: '04:00', weekday: 6, interval_min: 60, enabled: 1,
         start_delay_min: 0, retry_min: 0, backup_enabled: 0, backup_dir: '', backup_keep: 7, backup_interval_hour: 24, backup_last: '', backup_msg: '',
         next_run: iso(-50), last_run: iso(63), last_status: 'ok', last_message: 'A→B 2，B→A 0，删除 0，冲突 0' }
     ]
   };
   if (action === 'bootstrap') return Promise.resolve(db);
   if (action === 'run_backup') return Promise.resolve({ ok: true, scheduled: true });
+  if (action === 'save_source_backup') return Promise.resolve({ ok: true, id: 's1', next_run: iso(-1440) });
+  if (action === 'run_source_backup') return Promise.resolve({ ok: true, scheduled: true });
   if (action === 'logs') return Promise.resolve({ ok: true, runs: [
     { started: iso(4), status: 'ok', message: 'A→B 3，B→A 1，删除 0，冲突 0' },
     { started: iso(14), status: 'ok', message: 'A→B 0，B→A 0，删除 2，冲突 0' },
