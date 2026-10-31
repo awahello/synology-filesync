@@ -196,7 +196,10 @@ def list_dirs_via_worker(path, timeout=CLIENT_TIMEOUT):
         uid = payload.get("uid")
         if reason == "权限不足":
             if isinstance(uid, int) and uid != 0:
-                reason = "调度进程以 uid %d 运行，无权读取（需要 root，请重装套件以写入 sudo 规则）" % uid
+                reason = ("调度进程未以 root 运行（当前 uid %d）。"
+                          "请重装套件，或 SSH 登录后执行："
+                          "sed -i 's/\"run-as\": \"package\"/\"run-as\": \"root\"/' "
+                          "/var/packages/FileSync/conf/privilege && synopkg restart FileSync" % uid)
             else:
                 reason = "连 root 都读不到，可能是加密共享文件夹未解锁"
         raise LocalRootError(reason)

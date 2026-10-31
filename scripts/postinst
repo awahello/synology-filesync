@@ -25,8 +25,31 @@ if id "$PKG_USER" >/dev/null 2>&1; then
 fi
 
 # --------------------------------------------------------------------------
-# 免密 sudo：只允许套件账号执行 run_worker.sh，且脚本不接受任何参数。
-# 调度进程需要 root 才能读 /volume1/homes、其他用户的共享文件夹等目录。
+# 让调度进程以 root 运行（这是修好「没有权限访问 /volume1/homes」的关键）。
+#
+# DSM 7 出于安全，禁止第三方（未签名）套件在 spk 的 privilege 里声明
+# run-as: root，否则安装直接被拒。但运行时 DSM 读的是「已安装」的 privilege
+# 文件，所以社区成熟做法（Jellyfin / Zerotier 等）就是装完后把它改成 root，
+# 重启套件即生效。改完之后 start-stop-status 以 root 被拉起，worker 也就是
+# root，自然能读 /volume1/homes、别人的共享文件夹、加密目录。
+#
+# 只改 run-as 这一处；CGI 仍由下面 tool 段保持为套件账号 filesync，靠 worker
+# 开的本地 socket 代读目录，职责分离、最小权限。
+# --------------------------------------------------------------------------
+PRIV_FILE="${PKG_BASE}/conf/privilege"
+if [ -f "$PRIV_FILE" ]; then
+    if grep -Eq '"run-as"[[:space:]]*:[[:space:]]*"package"' "$PRIV_FILE"; then
+        sed -i 's/"run-as"[[:space:]]*:[[:space:]]*"package"/"run-as": "root"/' "$PRIV_FILE" 2>/dev/null || true
+        {
+            echo "$(date '+%F %T') 已将 ${PRIV_FILE} 的 run-as 改为 root；重启套件后调度进程即以 root 运行。"
+        } >> "${PKG_BASE}/var/install.log" 2>/dev/null || true
+    fi
+    sync "$PRIV_FILE" 2>/dev/null || true
+fi
+
+# --------------------------------------------------------------------------
+# 免密 sudo（兜底）：只允许套件账号执行 run_worker.sh，且脚本不接受任何参数。
+# 正常情况下上面的 run-as:root 已让 worker 是 root，这里只是极端情况下的退路。
 # --------------------------------------------------------------------------
 if [ -x "$ROOTLAUNCH" ]; then
     mkdir -p /etc/sudoers.d

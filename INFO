@@ -1,5 +1,5 @@
 package="FileSync"
-version="0.3.11-0001"
+version="0.3.12-0001"
 maintainer="AWA (www.akkdiy.cn)"
 maintainer_url="https://www.akkdiy.cn"
 arch="x86_64"
@@ -11,4 +11,4 @@ description="多站点文件互相同步：在本机与 OpenWrt 路由、Linux �
 displayname="多站文件同步"
 extractsize="493"
 toolkit_version="90074"
-create_time="20261031-20:00:41"
+create_time="20261031-20:14:36"
