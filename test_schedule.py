@@ -335,4 +335,4 @@ db.execute("DELETE FROM rules WHERE id=?", (delay_task,))
 db.commit()
 
 db.close()
-print("\n0.3.14 新功能全部测试通过")
+print("\n0.3.15 新功能全部测试通过")

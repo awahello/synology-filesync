@@ -455,14 +455,70 @@ function closeDirPicker() {
   dirPickCtx = null;
 }
 
+// DSM File Station 接口：由浏览器带着「当前登录的管理员会话」直接调用，
+// 所以能浏览 /volume1/homes 这类只有 root/管理员才能列的目录，不需要套件
+// 服务端自己有权限（「数据库自动备份」套件用的就是这个办法）。
+async function fsCall(apiName, params) {
+  const q = new URLSearchParams(Object.assign({ api: apiName }, params));
+  if (DSM_TOKEN) q.set('SynoToken', DSM_TOKEN);
+  const r = await fetch('/webapi/entry.cgi?' + q.toString(), { credentials: 'same-origin', cache: 'no-store' });
+  const j = await r.json();
+  if (!j.success) throw Error('File Station 无法读取此目录，请确认当前账号有访问权限');
+  return j.data || {};
+}
+
+// /volume1/photo → /photo；FileStation 的 folder_path 用共享文件夹相对路径
+function realToVirtual(real) {
+  return String(real || '').replace(/^\/volume\d+/, '');
+}
+
+async function fsListLocal(realPath) {
+  const virtual = realToVirtual(realPath);
+  let items, atRoot = false;
+  if (!virtual || virtual === '/') {
+    const d = await fsCall('SYNO.FileStation.List', {
+      version: '2', method: 'list_share', onlywritable: 'false',
+      additional: JSON.stringify(['real_path'])
+    });
+    items = d.shares || [];
+    atRoot = true;
+  } else {
+    const d = await fsCall('SYNO.FileStation.List', {
+      version: '2', method: 'list', folder_path: virtual,
+      additional: JSON.stringify(['real_path'])
+    });
+    items = d.files || [];
+  }
+  const dirs = [];
+  for (const x of items) {
+    if (!x || !x.isdir) continue;
+    const real = (x.additional && x.additional.real_path) || x.path || '';
+    if (real) dirs.push({ name: x.name, path: real });
+  }
+  dirs.sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
+  return { path: atRoot ? '/' : (realPath || '/'), dirs: dirs, truncated: false };
+}
+
 async function browseDir(path, fallbackToRoot) {
   if (!dirPickCtx) return;
   const target = (path || '').trim() || '/';
+  const site = siteById(dirPickCtx.siteId);
+  const isLocal = site && site.kind === 'local';
   $('dirPath').value = target;
   $('dirList').innerHTML = '<div class="empty">读取中…</div>';
   $('dirHint').textContent = '正在读取 ' + target;
   try {
-    const d = await api('browse', { site_id: dirPickCtx.siteId, path: target });
+    let d;
+    if (isLocal && !PREVIEW) {
+      // 本机：先用 DSM FileStation（管理员会话，能看 homes）；读不了再退回服务端
+      try {
+        d = await fsListLocal(target);
+      } catch (err) {
+        d = await api('browse', { site_id: dirPickCtx.siteId, path: target });
+      }
+    } else {
+      d = await api('browse', { site_id: dirPickCtx.siteId, path: target });
+    }
     dirCurrent = d.path;
     renderDirList(d);
   } catch (e) {
@@ -1244,7 +1300,7 @@ function previewApi(action, data) {
   const now = new Date();
   const iso = m => new Date(now.getTime() - m * 60000).toISOString();
   const db = {
-    version: '0.3.14-0001',
+    version: '0.3.15-0001',
     settings: { trash_days: '30', conflict_copy: '1', worker_paused: '0' },
     sites: [
       { id: 'local', name: '本机 · DiskStation', kind: 'local', host: '', port: 22, ssh_user: '', key_id: '', note: '', last_check: iso(3), last_ok: 1, last_check_msg: '本机路径可直接访问', caps_json: '{}' },

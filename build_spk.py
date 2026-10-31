@@ -18,7 +18,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 PKG = ROOT / "pkg"
-VERSION = "0.3.14-0001"
+VERSION = "0.3.15-0001"
 OUT = ROOT.parent / ("多站文件同步-" + VERSION.split("-")[0] + ".spk")
 
 # package.tgz 内的条目（顺序即打包顺序）
