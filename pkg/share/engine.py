@@ -255,6 +255,8 @@ def run_rule(db, rule_id, trigger="manual", log=None):
                 len(plan["a2b"]),
                 common.human_size(sum(man_a[rel][0] for rel in plan["a2b"] if rel in man_a))))
             remote.transfer(site_a, rule["dir_a"], site_b, rule["dir_b"], plan["a2b"])
+            remote.set_mtime(site_b, rule["dir_b"],
+                             [(rel, man_a[rel][1]) for rel in plan["a2b"] if rel in man_a])
 
         if plan["b2a"]:
             bytes_moved += sum(man_b[rel][0] for rel in plan["b2a"] if rel in man_b)
@@ -262,6 +264,8 @@ def run_rule(db, rule_id, trigger="manual", log=None):
                 len(plan["b2a"]),
                 common.human_size(sum(man_b[rel][0] for rel in plan["b2a"] if rel in man_b))))
             remote.transfer(site_b, rule["dir_b"], site_a, rule["dir_a"], plan["b2a"])
+            remote.set_mtime(site_a, rule["dir_a"],
+                             [(rel, man_b[rel][1]) for rel in plan["b2a"] if rel in man_b])
 
         deleted = 0
         if rule["delete_policy"] == "purge":
@@ -550,6 +554,10 @@ def run_group(db, group_id, trigger="manual", log=None):
                 source["site"]["name"], len(files), common.human_size(size)))
             remote.transfer(source["site"], source["dir"],
                             local_member["site"], local_member["dir"], files)
+            # 传输后把本机 mtime 统一为权威值：不依赖 rsync/tar 是否保留时间，
+            # 否则目标时间一旦漂移，下一轮又会被判成「有变化」而反复重传。
+            remote.set_mtime(local_member["site"], local_member["dir"],
+                             [(rel, manifests[winner_id][rel][1]) for rel in files])
             pulled += len(files)
             bytes_moved += size
         if not pulled:
@@ -574,6 +582,9 @@ def run_group(db, group_id, trigger="manual", log=None):
                 len(need), member["site"]["name"], common.human_size(size)))
             remote.transfer(local_member["site"], local_member["dir"],
                             member["site"], member["dir"], need)
+            # 目标站的时间同样统一为权威值，保证三站 mtime 完全一致
+            remote.set_mtime(member["site"], member["dir"],
+                             [(rel, manifests[plan["winners"][rel]][rel][1]) for rel in need])
             pushed += len(need)
             bytes_moved += size
         if not pushed:

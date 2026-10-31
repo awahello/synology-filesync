@@ -245,5 +245,10 @@ check("C 站拿到新内容", tree("siteC")["target.txt"] == "新内容", tree("
 check("其余文件未被改动", tree("nas")["keep1.txt"] == "一" and tree("nas")["keep2.txt"] == "二",
       tree("nas"))
 
+# 传输后三站 mtime 必须一致（不能被传输改写成「现在」）
+for fn in ("target.txt", "keep1.txt", "keep2.txt"):
+    stamps = [int(os.stat(DIRS[n] / fn).st_mtime) for n in ("nas", "siteA", "siteC")]
+    check("三站 %s 时间一致" % fn, len(set(stamps)) == 1, stamps)
+
 print("\n全部多站测试通过")
 shutil.rmtree(SANDBOX, ignore_errors=True)

@@ -682,6 +682,58 @@ def transfer(site_src, dir_src, site_dst, dir_dst, files, timeout=7200):
         shutil.rmtree(staging, ignore_errors=True)
 
 
+def _utc_stamp(epoch):
+    """epoch 秒 → UTC 的 'YYYYMMDDhhmm.ss'，供 touch -t 使用（配合 TZ=UTC）。"""
+    import datetime
+    dt = datetime.datetime.fromtimestamp(int(epoch), datetime.timezone.utc)
+    return dt.strftime("%Y%m%d%H%M.%S")
+
+
+def set_mtime_local(directory, entries):
+    """entries: [(rel, epoch), ...]，把本机文件 mtime 设为指定值。"""
+    changed = 0
+    for rel, epoch in entries:
+        path = os.path.join(directory, rel)
+        try:
+            os.utime(path, (int(epoch), int(epoch)))
+            changed += 1
+        except OSError:
+            pass
+    return changed
+
+
+def set_mtime_remote(site, directory, entries, batch=150, timeout=600):
+    """把远端文件 mtime 设为指定值。
+
+    用 `TZ=UTC touch -t` 而不是 `touch -d @epoch`：BusyBox 的 touch 不支持 @epoch，
+    而 `-t` 在 GNU 与 BusyBox 上都可用；TZ=UTC 保证与 epoch 精确对应，不受时区影响。
+    """
+    if not entries:
+        return 0
+    total = 0
+    for start in range(0, len(entries), batch):
+        chunk = entries[start:start + batch]
+        lines = ["cd %s 2>/dev/null || exit 3" % shlex.quote(directory)]
+        for rel, epoch in chunk:
+            lines.append("TZ=UTC touch -t %s -- %s 2>/dev/null && echo done" % (
+                _utc_stamp(epoch), shlex.quote(rel)))
+        rc, out, err = run_ssh(site, "\n".join(lines), timeout=timeout)
+        total += out.count("done")
+        if rc not in (0, 1):
+            detail = (err or "").strip().splitlines()
+            raise RemoteError("设置文件时间失败：" + ((detail[-1] if detail else "代码 " + str(rc))[:300]))
+    return total
+
+
+def set_mtime(site, directory, entries):
+    """把一批文件的 mtime 统一到指定值（本机/远端通用）。"""
+    if not entries:
+        return 0
+    if site["kind"] == "local":
+        return set_mtime_local(directory, entries)
+    return set_mtime_remote(site, directory, entries)
+
+
 def _copy_local(dir_src, dir_dst, files):
     for rel in files:
         src = os.path.join(dir_src, rel)
