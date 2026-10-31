@@ -134,8 +134,10 @@ def _os_error_text(exc, target_dir):
         return ("备份目录空间不足或用户配额已满%s。请清理空间、把「保留份数」调小，"
                 "或把备份目录换到空间更大的卷" % extra)
     if code in (1, 13):  # EPERM / EACCES
-        return ("没有权限写入备份目录（调度进程可能未以 root 运行，请重装/重启套件"
-                "让 run-as:root 生效）：%s" % exc)
+        return ("没有权限写入备份目录：调度进程没以 root 运行。两种修法任选其一——"
+                "① SSH 登录群晖执行：sed -i 's/\"run-as\": \"package\"/\"run-as\": \"root\"/' "
+                "/var/packages/FileSync/conf/privilege && synopkg restart FileSync ；"
+                "② 在 File Station 里给 filesync 用户授予该文件夹读写权限")
     return "打包失败：%s" % exc
 
 

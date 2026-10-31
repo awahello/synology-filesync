@@ -1,0 +1,19 @@
+#!/bin/sh
+# Copyright (c) 2026 AWA <https://www.akkdiy.cn>. All rights reserved.
+# 服务启动前：记录本次是以什么身份执行的；若是 root，再补一次 run-as 转换
+# （升级脚本有时以套件账号执行、改不了 root 拥有的 privilege，这里多一道保险）。
+set -u
+
+PKG_BASE="/var/packages/FileSync"
+PRIV_FILE="${PKG_BASE}/conf/privilege"
+mkdir -p "${PKG_BASE}/var" 2>/dev/null || true
+echo "$(date '+%F %T') [prestart] uid=$(id -u) user=$(id -un 2>/dev/null)" >> "${PKG_BASE}/var/install.log" 2>/dev/null || true
+
+if [ "$(id -u)" -eq 0 ] && [ -f "$PRIV_FILE" ]; then
+    if grep -Eq '"run-as"[[:space:]]*:[[:space:]]*"package"' "$PRIV_FILE"; then
+        sed -i 's/"run-as"[[:space:]]*:[[:space:]]*"package"/"run-as": "root"/' "$PRIV_FILE" 2>/dev/null || true
+        echo "$(date '+%F %T') [prestart] converted run-as to root" >> "${PKG_BASE}/var/install.log" 2>/dev/null || true
+    fi
+fi
+
+exit 0

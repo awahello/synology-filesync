@@ -6,6 +6,8 @@ set -u
 
 PKG_USER="filesync"
 PKG_BASE="/var/packages/FileSync"
+mkdir -p "${PKG_BASE}/var" 2>/dev/null || true
+echo "$(date '+%F %T') [postinst] uid=$(id -u) user=$(id -un 2>/dev/null)" >> "${PKG_BASE}/var/install.log" 2>/dev/null || true
 ROOTLAUNCH="${PKG_BASE}/target/share/run_worker.sh"
 STOPLAUNCH="${PKG_BASE}/target/share/stop_worker.sh"
 SUDO_FILE="/etc/sudoers.d/FileSync-worker"
@@ -45,6 +47,8 @@ if [ -f "$PRIV_FILE" ]; then
         } >> "${PKG_BASE}/var/install.log" 2>/dev/null || true
     fi
     sync "$PRIV_FILE" 2>/dev/null || true
+    echo "$(date '+%F %T') [postinst] privilege run-as:" >> "${PKG_BASE}/var/install.log" 2>/dev/null || true
+    grep -m1 'run-as' "$PRIV_FILE" >> "${PKG_BASE}/var/install.log" 2>/dev/null || true
 fi
 
 # --------------------------------------------------------------------------
