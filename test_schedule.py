@@ -243,11 +243,13 @@ check("备份结果写回任务", bool(row["backup_last"]) and "成功" in row["
 skipped = engine.run_backup(db, "rules", backup_task)
 check("未到间隔不再重复打包", skipped is None)
 
-import tarfile
-with tarfile.open(info["path"]) as tf:
-    members = tf.getnames()
+import zipfile
+check("默认打包成 zip", info["path"].endswith(".zip"), info["path"])
+with zipfile.ZipFile(info["path"]) as zf:
+    members = zf.namelist()
 check("压缩包内不含 @eaDir", not any("@eaDir" in m for m in members), members)
 check("压缩包内不含 *.log", not any(m.endswith(".log") for m in members), members)
+check("压缩包内含 a.txt", any(m.endswith("/a.txt") or m == "a.txt" for m in members), members)
 
 # 备份目录落在同步目录里时，接口层已拦，引擎层再兜一次
 try:
@@ -398,4 +400,4 @@ finally:
     archive.TAR_BIN = old_bin
 
 db.close()
-print("\n0.3.18 新功能全部测试通过")
+print("\n0.3.19 新功能全部测试通过")

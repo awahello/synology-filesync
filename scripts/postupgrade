@@ -1,0 +1,71 @@
+#!/bin/sh
+# Copyright (c) 2026 AWA <https://www.akkdiy.cn>. All rights reserved.
+# 升级后：重新把「已安装」的 conf/privilege 的 run-as 改为 root。
+#
+# 为什么需要它
+# ------------
+# DSM 7 升级套件时，会用新 spk 里的 conf/privilege（run-as: package）覆盖
+# 已安装的那份，而 postinst 在升级流程里不一定执行。结果就是升级后 worker
+# 又变回套件账号，写 /volume1/homes 报 Permission denied。
+# 所以升级后必须再改一次——内容和 postinst 完全一致。
+set -u
+
+PKG_USER="filesync"
+PKG_BASE="/var/packages/FileSync"
+ROOTLAUNCH="${PKG_BASE}/target/share/run_worker.sh"
+STOPLAUNCH="${PKG_BASE}/target/share/stop_worker.sh"
+SUDO_FILE="/etc/sudoers.d/FileSync-worker"
+SUDO_RULE="${PKG_USER} ALL=(root) NOPASSWD: ${ROOTLAUNCH}, ${STOPLAUNCH}"
+MARK_BEGIN="# >>> FileSync worker >>>"
+MARK_END="# <<< FileSync worker <<<"
+
+if id "$PKG_USER" >/dev/null 2>&1; then
+    synogroup --memberadd administrators "$PKG_USER" >/dev/null 2>&1 || true
+fi
+
+mkdir -p "${PKG_BASE}/var"
+chmod 0700 "${PKG_BASE}/var"
+if id "$PKG_USER" >/dev/null 2>&1; then
+    chown "$PKG_USER:$PKG_USER" "${PKG_BASE}/var" 2>/dev/null || true
+fi
+
+# 把已安装的 privilege 的 run-as 改回 root（升级会用 spk 里的 package 覆盖）
+PRIV_FILE="${PKG_BASE}/conf/privilege"
+if [ -f "$PRIV_FILE" ]; then
+    if grep -Eq '"run-as"[[:space:]]*:[[:space:]]*"package"' "$PRIV_FILE"; then
+        sed -i 's/"run-as"[[:space:]]*:[[:space:]]*"package"/"run-as": "root"/' "$PRIV_FILE" 2>/dev/null || true
+        {
+            echo "$(date '+%F %T') [upgrade] 已将 ${PRIV_FILE} 的 run-as 改为 root；重启套件后调度进程即以 root 运行。"
+        } >> "${PKG_BASE}/var/install.log" 2>/dev/null || true
+    fi
+    sync "$PRIV_FILE" 2>/dev/null || true
+fi
+
+# 免密 sudo 兜底（同 postinst）
+if [ -x "$ROOTLAUNCH" ]; then
+    mkdir -p /etc/sudoers.d
+    chmod 0755 /etc/sudoers.d 2>/dev/null || true
+    printf '%s\n' "$SUDO_RULE" > "$SUDO_FILE" 2>/dev/null || true
+    chown root:root "$SUDO_FILE" 2>/dev/null || true
+    chmod 0440 "$SUDO_FILE" 2>/dev/null || true
+    if command -v visudo >/dev/null 2>&1; then
+        visudo -cf "$SUDO_FILE" >/dev/null 2>&1 || rm -f "$SUDO_FILE"
+    fi
+    if ! sudo -n -l -U "$PKG_USER" 2>/dev/null | grep -Fq "run_worker.sh"; then
+        if [ -f /etc/sudoers ] && ! grep -Fq "$MARK_BEGIN" /etc/sudoers; then
+            cp -a /etc/sudoers /etc/sudoers.filesync.bak 2>/dev/null || true
+            {
+                printf '\n%s\n' "$MARK_BEGIN"
+                printf '%s\n' "$SUDO_RULE"
+                printf '%s\n' "$MARK_END"
+            } >> /etc/sudoers 2>/dev/null || true
+            if command -v visudo >/dev/null 2>&1; then
+                if ! visudo -c >/dev/null 2>&1; then
+                    [ -f /etc/sudoers.filesync.bak ] && cp -a /etc/sudoers.filesync.bak /etc/sudoers
+                fi
+            fi
+        fi
+    fi
+fi
+
+exit 0

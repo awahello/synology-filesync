@@ -1,0 +1,6 @@
+#!/bin/sh
+# Copyright (c) 2026 AWA <https://www.akkdiy.cn>. All rights reserved.
+# 升级前：此时旧的 conf/privilege 还是上一次装好的内容（run-as 已是 root），
+# 无需处理；真正的改动在 postupgrade 里（升级会用新 spk 的 privilege 覆盖）。
+set -u
+exit 0

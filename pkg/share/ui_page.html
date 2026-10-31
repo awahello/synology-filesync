@@ -188,7 +188,7 @@ button:disabled{opacity:.5;cursor:not-allowed}
     <div class="field small"><label for="backupDelay">备份延迟</label><input id="backupDelay" type="number" min="0" max="1440" value="5"></div>
     <div class="field tiny"><label>&nbsp;</label><span class="hint" style="margin:9px 0 0">分钟</span></div>
   </div>
-  <p class="hint" id="backupHint">压缩备份在同步成功后触发：先等「备份延迟」这么多分钟（默认 5），再把本机那一端的目录打成 <code>目录名-日期-时间.tar.gz</code> 放进备份目录，超过保留份数就删最旧的。「备份间隔」是两次打包之间的最短时间，没到间隔就跳过。备份目录不能放在同步目录里面，否则备份包会被当成新文件同步出去。卡片上的「立即备份」是当场打包，目录很大时页面会等一会儿。</p>
+  <p class="hint" id="backupHint">压缩备份在同步成功后触发：先等「备份延迟」这么多分钟（默认 5），再把本机那一端的目录打成 <code>目录名-日期-时间.zip</code> 放进备份目录，超过保留份数就删最旧的。「备份间隔」是两次打包之间的最短时间，没到间隔就跳过。备份目录不能放在同步目录里面，否则备份包会被当成新文件同步出去。卡片上的「立即备份」会排入队列，20 秒内由调度进程以 root 执行，刷新即可看到结果。</p>
   <div class="row" style="margin-top:14px">
     <button id="saveRuleBtn">保存规则</button>
     <button class="secondary" id="cancelEditBtn" hidden>取消编辑</button>
@@ -276,7 +276,7 @@ button:disabled{opacity:.5;cursor:not-allowed}
 
 <div class="footer">
   工作原理：<strong>两站规则</strong>拿两端清单和上次同步基线做三向比较，只传新增或修改的文件，冲突以修改时间较新者为准；<strong>多站互备</strong>每轮扫描全部成员，逐个文件挑出最新版本先拉回本机、再推给其余成员，删除需要多数成员同意（三站里两个站删了才真的删）。<br>
-  <strong>压缩备份</strong>（可选）在同步成功后把本机目录打成 <code>目录名-日期-时间.tar.gz</code> 放进另一个目录，按保留份数轮转；它是独立的时间点快照，不受同步覆盖影响。<br>
+  <strong>压缩备份</strong>（可选）在同步成功后把本机目录打成 <code>目录名-日期-时间.zip</code> 放进另一个目录，按保留份数轮转；它是独立的时间点快照，不受同步覆盖影响。<br>
   同一个目录不要同时出现在两站规则和同步组里，两套基线会互相打架。<br>
   套件以 DSM 服务账号运行，需要读取共享文件夹的权限，因此安装时会被加入 administrators 组。SSH 私钥仅保存在本机 <code>/var/packages/FileSync/var/keys</code>，权限 0600。<br>
   © 2026 AWA · www.akkdiy.cn。免责声明：本套件按「现状」提供，请在正式启用前用「预演」确认同步范围，并自行做好重要数据的独立备份。
@@ -1298,7 +1298,7 @@ function previewApi(action, data) {
   const now = new Date();
   const iso = m => new Date(now.getTime() - m * 60000).toISOString();
   const db = {
-    version: '0.3.18-0001',
+    version: '0.3.19-0001',
     settings: { trash_days: '30', conflict_copy: '1', worker_paused: '0' },
     sites: [
       { id: 'local', name: '本机 · DiskStation', kind: 'local', host: '', port: 22, ssh_user: '', key_id: '', note: '', last_check: iso(3), last_ok: 1, last_check_msg: '本机路径可直接访问', caps_json: '{}' },
@@ -1311,7 +1311,7 @@ function previewApi(action, data) {
         start_delay_min: 5, retry_min: 60,
         backup_enabled: 1, backup_dir: '/volume1/backup/photo', backup_keep: 7, backup_interval_hour: 24,
         backup_delay_min: 5, backup_due_at: iso(-1),
-        backup_last: iso(180), backup_msg: '成功：photo-20261030-020000.tar.gz（1.8 GB，保留 7 份）',
+        backup_last: iso(180), backup_msg: '成功：photo-20261030-020000.zip（1.8 GB，保留 7 份）',
         next_run: iso(-8), last_run: iso(6), last_status: 'ok',
         last_message: '拉回 2，推送 4，删除 0，冲突 0',
         members: [
@@ -1326,7 +1326,7 @@ function previewApi(action, data) {
         next_run: iso(-6), last_run: iso(4), last_status: 'ok', last_message: 'A→B 3，B→A 1，删除 0，冲突 0' },
       { id: 'r2', name: '网站文件回传', site_a: 'c', dir_a: '/var/www/site', site_b: 'local', dir_b: '/volume1/web/site', mode: 'b2a', delete_policy: 'trash', excludes: '*.log', interval_min: 30, enabled: 1,
         start_delay_min: 10, retry_min: 60, backup_enabled: 1, backup_dir: '/volume1/backup/web', backup_keep: 14, backup_interval_hour: 12,
-        backup_last: iso(300), backup_msg: '成功：site-20261030-080000.tar.gz（320 MB，保留 14 份，清理 1 份旧包）',
+        backup_last: iso(300), backup_msg: '成功：site-20261030-080000.zip（320 MB，保留 14 份，清理 1 份旧包）',
         next_run: iso(-22), last_run: iso(31), last_status: 'error', last_message: '连接超时（45 秒）' },
       { id: 'r3', name: '路由器配置备份', site_a: 'a', dir_a: '/etc/config', site_b: 'local', dir_b: '/volume1/backup/openwrt', mode: 'a2b', delete_policy: 'keep', excludes: '', interval_min: 60, enabled: 1,
         start_delay_min: 0, retry_min: 0, backup_enabled: 0, backup_dir: '', backup_keep: 7, backup_interval_hour: 24, backup_last: '', backup_msg: '',

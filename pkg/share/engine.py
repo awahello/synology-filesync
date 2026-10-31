@@ -104,6 +104,20 @@ def task_local_dir(db, table, owner_id):
     return local_dir_of_group(db, owner_id)
 
 
+def _log_backup_run(db, table, owner_id, status, message):
+    """把压缩备份事件写进 runs 表，界面上的「日志」就能看到备份的源目录与结果。"""
+    run_key = owner_id if table == "rules" else "group:" + owner_id
+    now = common.now_iso()
+    try:
+        db.execute(
+            "INSERT INTO runs(rule_id,started,finished,status,message) VALUES(?,?,?,?,?)",
+            (run_key, now, now, status, message[:2000]),
+        )
+        db.commit()
+    except Exception:  # noqa: BLE001 - 记日志失败不能影响备份本身
+        pass
+
+
 def run_backup(db, table, owner_id, force=False, log=None):
     """按配置压缩备份本机目录。
 
@@ -124,9 +138,11 @@ def run_backup(db, table, owner_id, force=False, log=None):
         return None
     target = row["backup_dir"] or ""
     if not target:
+        _log_backup_run(db, table, owner_id, "error", "压缩备份失败：还没有设置备份目录")
         raise RuleError("还没有设置备份目录")
     source = task_local_dir(db, table, owner_id)
     if not source:
+        _log_backup_run(db, table, owner_id, "error", "压缩备份失败：这个任务没有本机目录")
         raise RuleError("这个任务没有本机目录，无法压缩备份")
 
     if not force:
@@ -145,6 +161,8 @@ def run_backup(db, table, owner_id, force=False, log=None):
                    (common.now_iso(), message, owner_id))
         db.commit()
         emit("压缩备份失败：" + str(exc), "error")
+        _log_backup_run(db, table, owner_id, "error",
+                        "压缩备份失败：%s → %s：%s" % (source, target, str(exc)[:500]))
         raise RuleError("压缩备份失败：" + str(exc))
 
     message = "成功：%s（%s，保留 %d 份%s）" % (
@@ -154,6 +172,11 @@ def run_backup(db, table, owner_id, force=False, log=None):
                (common.now_iso(), message, owner_id))
     db.commit()
     emit("压缩备份完成：" + message, "good")
+    _log_backup_run(db, table, owner_id, "ok",
+                    "压缩备份成功：%s → %s（%s，保留 %d 份%s）" % (
+                        source, os.path.join(target, info["name"]),
+                        common.human_size(info["size"]), info["keep"],
+                        "，清理 %d 份旧包" % info["removed"] if info["removed"] else ""))
     return dict(info, message=message, source=source, target=target)
 
 

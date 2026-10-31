@@ -10,8 +10,9 @@
 
 命名规则
 --------
-`<源目录名>-YYYYmmdd-HHMMSS.tar.gz`，前缀固定，轮转时只清理自己产生的文件，
-备份目录里用户放的其它东西一概不碰。
+默认 `<源目录名>-YYYYmmdd-HHMMSS.zip`（Windows 上双击即可打开，不用额外解压工具）；
+前缀固定，轮转时只清理自己产生的文件，备份目录里用户放的其它东西一概不碰。
+也兼容旧的 `.tar.gz` 包（列举与轮转时一并识别）。
 """
 
 import fnmatch
@@ -20,10 +21,16 @@ import shutil
 import subprocess
 import tarfile
 import time
+import zipfile
 
 import common
 
 TAR_BIN = shutil.which("tar") or "/bin/tar"
+
+# 备份格式：zip（默认，Windows 上直接双击可开）或 tar.gz
+FORMAT_EXT = {"zip": ".zip", "tar": ".tar.gz"}
+DEFAULT_FORMAT = "zip"
+ARCHIVE_EXTS = (".zip", ".tar.gz")
 
 # 与同步引擎一致的排除项：@eaDir 里是缩略图，回收站里是待删文件，
 # 打包它们既慢又没意义，还会让压缩包膨胀好几倍。
@@ -44,13 +51,14 @@ def archive_prefix(source):
     return base or "root"
 
 
-def archive_name(source, when=None):
+def archive_name(source, fmt=DEFAULT_FORMAT, when=None):
+    ext = FORMAT_EXT.get(fmt or DEFAULT_FORMAT, ".zip")
     stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime(when if when is not None else time.time()))
-    return "%s-%s.tar.gz" % (archive_prefix(source), stamp)
+    return "%s-%s%s" % (archive_prefix(source), stamp, ext)
 
 
 def list_archives(source, target_dir):
-    """列出该源目录的备份，最新的排在前面。"""
+    """列出该源目录的备份（zip 与 tar.gz 都算），最新的排在前面。"""
     prefix = archive_prefix(source)
     try:
         with os.scandir(target_dir) as entries:
@@ -59,7 +67,7 @@ def list_archives(source, target_dir):
         return []
     items = []
     for entry in raw:
-        if not (entry.name.startswith(prefix + "-") and entry.name.endswith(".tar.gz")):
+        if not (entry.name.startswith(prefix + "-") and entry.name.endswith(ARCHIVE_EXTS)):
             continue
         try:
             info = entry.stat()
@@ -112,6 +120,45 @@ def _tar_error(lines, returncode, target_dir):
     return "打包失败：" + detail[:400]
 
 
+def _skipped(rel, patterns):
+    base_name = rel.rsplit("/", 1)[-1]
+    return any(fnmatch.fnmatch(rel, p) or fnmatch.fnmatch(base_name, p) for p in patterns)
+
+
+def _os_error_text(exc, target_dir):
+    """把 zipfile/os 抛出的 OSError 翻译成能看懂的提示。"""
+    code = getattr(exc, "errno", None)
+    if code in (28, 122):  # ENOSPC / EDQUOT
+        free = _free_space(target_dir)
+        extra = "（剩余 %s）" % common.human_size(free) if free is not None else ""
+        return ("备份目录空间不足或用户配额已满%s。请清理空间、把「保留份数」调小，"
+                "或把备份目录换到空间更大的卷" % extra)
+    if code in (1, 13):  # EPERM / EACCES
+        return ("没有权限写入备份目录（调度进程可能未以 root 运行，请重装/重启套件"
+                "让 run-as:root 生效）：%s" % exc)
+    return "打包失败：%s" % exc
+
+
+def _run_zip(parent, base, output, patterns):
+    """用 Python 的 zipfile 打包（不依赖系统 zip 命令），中文文件名按 UTF-8 写入。"""
+    root = os.path.join(parent, base)
+    try:
+        with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as zf:
+            for dirpath, dirnames, filenames in os.walk(root):
+                rel_dir = os.path.relpath(dirpath, root)
+                prefix = "" if rel_dir == "." else rel_dir.replace(os.sep, "/") + "/"
+                dirnames[:] = [d for d in dirnames if not _skipped(prefix + d, patterns)]
+                for name in filenames:
+                    rel = prefix + name
+                    if _skipped(rel, patterns):
+                        continue
+                    zf.write(os.path.join(dirpath, name), arcname=base + "/" + rel)
+    except OSError as exc:
+        raise ArchiveError(_os_error_text(exc, os.path.dirname(output) or "."))
+    except zipfile.BadZipFile as exc:
+        raise ArchiveError("打包失败：%s" % exc)
+
+
 def _run_tar(parent, base, output, patterns, timeout=ARCHIVE_TIMEOUT):
     # Windows 上（仅本地调试）tar 不认 C:/ 这样的盘符路径，直接走 Python 兜底；
     # DSM 上始终是 Linux，用系统 tar 更快也更省内存。
@@ -134,20 +181,16 @@ def _run_tar(parent, base, output, patterns, timeout=ARCHIVE_TIMEOUT):
         return
 
     # 没有 tar 的环境（本地调试）用 Python 实现兜底，行为与 tar 一致
-    def skipped(rel):
-        base_name = rel.rsplit("/", 1)[-1]
-        return any(fnmatch.fnmatch(rel, p) or fnmatch.fnmatch(base_name, p) for p in patterns)
-
     root = os.path.join(parent, base)
     try:
         with tarfile.open(output, "w:gz") as handle:
             for dirpath, dirnames, filenames in os.walk(root):
                 rel_dir = os.path.relpath(dirpath, root)
                 prefix = "" if rel_dir == "." else rel_dir.replace(os.sep, "/") + "/"
-                dirnames[:] = [d for d in dirnames if not skipped(prefix + d)]
+                dirnames[:] = [d for d in dirnames if not _skipped(prefix + d, patterns)]
                 for name in filenames:
                     rel = prefix + name
-                    if skipped(rel):
+                    if _skipped(rel, patterns):
                         continue
                     handle.add(os.path.join(dirpath, name), arcname=base + "/" + rel, recursive=False)
     except (OSError, tarfile.TarError) as exc:
@@ -161,8 +204,8 @@ def _unlink(path):
         pass
 
 
-def create_archive(source, target_dir, keep=7, excludes=()):
-    """把 source 目录打包成 target_dir 下的 tar.gz，并按份数清理旧包。
+def create_archive(source, target_dir, keep=7, excludes=(), fmt=DEFAULT_FORMAT):
+    """把 source 目录打包成 target_dir 下的 zip（默认）或 tar.gz，并按份数清理旧包。
 
     返回 {"name","path","size","keep","removed"}；失败抛 ArchiveError。
     """
@@ -193,10 +236,14 @@ def create_archive(source, target_dir, keep=7, excludes=()):
         raise ArchiveError("备份目录空间不足（仅剩 %s），请清理空间或换到更大的卷"
                            % common.human_size(free))
 
-    final = os.path.join(target_dir, archive_name(source))
+    final = os.path.join(target_dir, archive_name(source, fmt))
     temp = final + ".part"
+    patterns = _clean_patterns(excludes)
     try:
-        _run_tar(parent, base, temp, _clean_patterns(excludes))
+        if (fmt or DEFAULT_FORMAT) == "tar":
+            _run_tar(parent, base, temp, patterns)
+        else:
+            _run_zip(parent, base, temp, patterns)
         os.replace(temp, final)
     except Exception:
         _unlink(temp)

@@ -70,8 +70,10 @@ def next_run_after(db, kind, task_id, ok):
     if retry <= 0:
         return compute_next(interval), ""
     run_key = task_id if kind == "rule" else "group:" + task_id
+    # 只看「同步成功」的记录；压缩备份也会写 runs，别把备份成功当成同步成功
     ever_ok = db.execute(
-        "SELECT 1 FROM runs WHERE rule_id=? AND status='ok' LIMIT 1", (run_key,)
+        "SELECT 1 FROM runs WHERE rule_id=? AND status='ok' "
+        "AND message NOT LIKE '压缩备份%' LIMIT 1", (run_key,)
     ).fetchone()
     if ever_ok:
         return compute_next(interval), ""
@@ -238,6 +240,10 @@ def main():
         except AttributeError:  # pragma: no cover
             uid = -1
         log("目录代读服务已就绪（uid=%d）" % uid)
+        if uid not in (0, -1):
+            log("[warn] 调度进程未以 root 运行（uid=%d）：同步/备份读写 /volume1/homes "
+                "会报 Permission denied。请重装或重启套件，让 postinst/postupgrade "
+                "写入的 run-as:root 生效。" % uid)
         # 独立后台线程常驻服务：同步（阻塞）进行时也能秒回网页端的列目录请求，
         # 不再因为正忙而超时（报「调度进程忙」）。
         threading.Thread(
