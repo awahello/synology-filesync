@@ -10,6 +10,15 @@ __pycache__/
 *.pyo
 *.pyd
 
+# ---- 运行时数据：SSH 私钥、数据库、日志，绝对不能进仓库 ----
+var/
+pkg/var/
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+known_hosts
+csrf.key
+
 # ---- 临时 / 预览 ----
 _preview_test.html
 _shot_*.png
