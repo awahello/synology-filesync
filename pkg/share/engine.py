@@ -41,14 +41,15 @@ class GroupError(RuntimeError):
 # --------------------------------------------------------------------------
 # 读取
 # --------------------------------------------------------------------------
-def _brief(files, limit=30):
-    """把文件列表压成一行摘要，避免日志里塞几百个路径。"""
+def _brief(files, limit=20):
+    """把文件列表排成多行（每行一个），便于在日志里逐条阅读。"""
     files = list(files)
     if not files:
-        return ""
-    if len(files) <= limit:
-        return "、".join(files)
-    return "、".join(files[:limit]) + " 等 %d 个" % len(files)
+        return "（无）"
+    lines = ["  " + f for f in files[:limit]]
+    if len(files) > limit:
+        lines.append("  … 还有 %d 个未列出" % (len(files) - limit))
+    return "\n" + "\n".join(lines)
 
 
 def load_site(db, site_id):
@@ -239,6 +240,10 @@ def run_rule(db, rule_id, trigger="manual", log=None):
         emit("A 端 %d 个文件，B 端 %d 个文件" % (len(man_a), len(man_b)))
 
         baseline = load_baseline(db, rule_id)
+        # 任一端扫描到 0 个文件而基线非空，禁用删除，防止路径失效误删另一端
+        if baseline and (not man_a or not man_b):
+            emit("警告：有一端扫描到 0 个文件，本轮不执行删除（请检查目录是否正确）", "warn")
+            delete_follow = False
         plan = decide(man_a, man_b, baseline, rule["mode"], delete_follow)
         if not plan["a2b"] and not plan["b2a"] and not plan["del_a"] and not plan["del_b"]:
             emit("两端内容一致：%d 个文件全部已是最新，本轮只扫描检查，不传输" % plan["same"], "good")
@@ -266,10 +271,13 @@ def run_rule(db, rule_id, trigger="manual", log=None):
                 len(plan["a2b"]),
                 common.human_size(sum(man_a[rel][0] for rel in plan["a2b"] if rel in man_a)),
                 _brief(plan["a2b"])))
-            detail.append("A → B：%s" % _brief(plan["a2b"]))
+            detail.append("A → B（%d 个）：%s" % (len(plan["a2b"]), _brief(plan["a2b"])))
             remote.transfer(site_a, rule["dir_a"], site_b, rule["dir_b"], plan["a2b"])
-            remote.set_mtime(site_b, rule["dir_b"],
-                             [(rel, man_a[rel][1]) for rel in plan["a2b"] if rel in man_a])
+            try:
+                remote.set_mtime(site_b, rule["dir_b"],
+                                 [(rel, man_a[rel][1]) for rel in plan["a2b"] if rel in man_a])
+            except remote.RemoteError as exc:
+                emit("统一 B 端文件时间失败（文件已同步）：%s" % exc, "warn")
 
         if plan["b2a"]:
             bytes_moved += sum(man_b[rel][0] for rel in plan["b2a"] if rel in man_b)
@@ -277,10 +285,13 @@ def run_rule(db, rule_id, trigger="manual", log=None):
                 len(plan["b2a"]),
                 common.human_size(sum(man_b[rel][0] for rel in plan["b2a"] if rel in man_b)),
                 _brief(plan["b2a"])))
-            detail.append("B → A：%s" % _brief(plan["b2a"]))
+            detail.append("B → A（%d 个）：%s" % (len(plan["b2a"]), _brief(plan["b2a"])))
             remote.transfer(site_b, rule["dir_b"], site_a, rule["dir_a"], plan["b2a"])
-            remote.set_mtime(site_a, rule["dir_a"],
-                             [(rel, man_b[rel][1]) for rel in plan["b2a"] if rel in man_b])
+            try:
+                remote.set_mtime(site_a, rule["dir_a"],
+                                 [(rel, man_b[rel][1]) for rel in plan["b2a"] if rel in man_b])
+            except remote.RemoteError as exc:
+                emit("统一 A 端文件时间失败（文件已同步）：%s" % exc, "warn")
 
         deleted = 0
         if rule["delete_policy"] == "purge":
@@ -295,7 +306,7 @@ def run_rule(db, rule_id, trigger="manual", log=None):
             emit("跟随删除 %d 个文件（%s）：%s" % (
                 deleted, "直接删除" if rule["delete_policy"] == "purge" else "已移入回收站",
                 _brief(plan["del_a"] + plan["del_b"])))
-            detail.append("删除：%s" % _brief(plan["del_a"] + plan["del_b"]))
+            detail.append("删除（%d 个）：%s" % (deleted, _brief(plan["del_a"] + plan["del_b"])))
 
         # 以同步后的真实状态重建基线，rsync 部分失败时下次会自动重试
         man_a_after = remote.filter_manifest(remote.scan_side(site_a, rule["dir_a"]), patterns)
@@ -475,18 +486,29 @@ def decide_group(manifests, baseline, delete_follow):
                 plan["winners"][rel] = next(iter(present))
             continue
 
-        # 多版本并存：修改时间最新的胜出，这正是「最新文件」的判定
-        winner_id, winner_meta = max(present.items(), key=lambda kv: kv[1][1])
-        plan["winners"][rel] = winner_id
-        # 只有两个及以上成员都偏离了基线，才算真冲突（多方各改一版）；
-        # 若只有一个成员改过、其余仍是上次同步的版本，那只是单向更新，
-        # 不该给没改的一方留冲突副本。
+        # 多版本并存：先看谁相对基线改过。
+        # 只按 mtime 选最新有个坑：OpenWrt 等设备时钟可能比 NAS 慢，
+        # 明明在路由器上刚改过，时间戳却更旧，会被本机旧版本覆盖。
         base = baseline.get(rel)
-        changed = [mid for mid, meta in present.items() if base is None or meta != base]
-        if len(changed) >= 2:
-            for mid, meta in present.items():
+        # 判断「谁改过」只看大小：mtime 会受各站时钟影响（OpenWrt 常比 NAS 慢），
+        # 用时间判断会把刚改过的站误判成旧版本，导致它的改动被覆盖。
+        # 大小变了才算真的改过；大小没变的差异交给下面的冲突分支处理。
+        changed = {mid: meta for mid, meta in present.items() if base is None or meta[0] != base[0]}
+
+        if len(changed) == 1:
+            # 只有一个站改过 → 以它为准，不看 mtime
+            plan["winners"][rel] = next(iter(changed))
+        elif len(changed) >= 2:
+            # 多个站都改过 → 真冲突，mtime 最新者胜，其余留副本
+            winner_id, winner_meta = max(changed.items(), key=lambda kv: kv[1][1])
+            plan["winners"][rel] = winner_id
+            for mid, meta in changed.items():
                 if mid != winner_id and meta != winner_meta:
                     plan["conflicts"].append((rel, mid))
+        else:
+            # 没有站改过但版本不同（基线缺失或不准）→ 退回 mtime 最新
+            winner_id, winner_meta = max(present.items(), key=lambda kv: kv[1][1])
+            plan["winners"][rel] = winner_id
     return plan
 
 
@@ -538,6 +560,13 @@ def run_group(db, group_id, trigger="manual", log=None):
             emit("扫描 %s（%s）：%d 个文件" % (member["site"]["name"], member["dir"], len(manifest)))
 
         baseline = load_group_baseline(db, group_id)
+        # 某成员扫描到 0 个文件、而基线里有过记录，说明该站目录可能失效（路径错/未挂载）。
+        # 此时若按多数决删除，会把仅存的文件从其他站删掉，所以本轮禁用删除。
+        empty_members = [m for m in members if not manifests[m["id"]]]
+        if empty_members and baseline:
+            names = "、".join(m["site"]["name"] for m in empty_members)
+            emit("警告：%s 扫描到 0 个文件，本轮不执行删除（请检查该站目录是否正确）" % names, "warn")
+            delete_follow = False
         plan = decide_group(manifests, baseline, delete_follow)
         if not plan["winners"] and not plan["delete"]:
             emit("三站内容一致：%d 个文件全部已是最新，本轮只扫描检查，不拉取也不推送" % plan["same"], "good")
@@ -565,6 +594,27 @@ def run_group(db, group_id, trigger="manual", log=None):
                 continue
             pull_by_source.setdefault(winner_id, []).append(rel)
 
+        # 时间不同但内容相同（复制/解压导致时间漂移）不应重复传输：
+        # 用内容哈希确认，相同的从计划里剔除，只保留真正内容不同的文件。
+        skipped_same = 0
+        if pull_by_source:
+            for winner_id in list(pull_by_source):
+                files = pull_by_source[winner_id]
+                try:
+                    src_hashes = remote.hash_side(by_id[winner_id]["site"], by_id[winner_id]["dir"], files)
+                    dst_hashes = remote.hash_side(local_member["site"], local_member["dir"], files)
+                except remote.RemoteError as exc:
+                    emit("计算哈希失败，按原计划传输：%s" % exc, "warn")
+                    continue
+                keep = [rel for rel in files if src_hashes.get(rel) != dst_hashes.get(rel)]
+                skipped_same += len(files) - len(keep)
+                if keep:
+                    pull_by_source[winner_id] = keep
+                else:
+                    del pull_by_source[winner_id]
+        if skipped_same:
+            emit("内容相同、仅时间不同：跳过 %d 个文件" % skipped_same, "good")
+
         pulled = 0
         bytes_moved = 0
         for winner_id, files in pull_by_source.items():
@@ -572,13 +622,17 @@ def run_group(db, group_id, trigger="manual", log=None):
             size = sum(manifests[winner_id][rel][0] for rel in files)
             emit("阶段一：从 %s 拉回 %d 个文件（%s）：%s" % (
                 source["site"]["name"], len(files), common.human_size(size), _brief(files)))
-            detail.append("拉回 %s → 本机：%s" % (source["site"]["name"], _brief(files)))
+            detail.append("拉回 %s → 本机（%d 个，以 %s 的版本为准）：%s" % (
+                source["site"]["name"], len(files), source["site"]["name"], _brief(files)))
             remote.transfer(source["site"], source["dir"],
                             local_member["site"], local_member["dir"], files)
             # 传输后把本机 mtime 统一为权威值：不依赖 rsync/tar 是否保留时间，
             # 否则目标时间一旦漂移，下一轮又会被判成「有变化」而反复重传。
-            remote.set_mtime(local_member["site"], local_member["dir"],
-                             [(rel, manifests[winner_id][rel][1]) for rel in files])
+            try:
+                remote.set_mtime(local_member["site"], local_member["dir"],
+                                 [(rel, manifests[winner_id][rel][1]) for rel in files])
+            except remote.RemoteError as exc:
+                emit("统一本机文件时间失败（文件已同步，不影响内容）：%s" % exc, "warn")
             pulled += len(files)
             bytes_moved += size
         if not pulled:
@@ -596,17 +650,31 @@ def run_group(db, group_id, trigger="manual", log=None):
                 target_meta = manifests[member["id"]].get(rel)
                 if target_meta != manifests[winner_id][rel]:
                     need.append(rel)
+            if need:
+                try:
+                    src_hashes = remote.hash_side(local_member["site"], local_member["dir"], need)
+                    dst_hashes = remote.hash_side(member["site"], member["dir"], need)
+                    before = len(need)
+                    need = [rel for rel in need if src_hashes.get(rel) != dst_hashes.get(rel)]
+                    skipped_same += before - len(need)
+                except remote.RemoteError as exc:
+                    emit("计算哈希失败，按原计划推送：%s" % exc, "warn")
             if not need:
                 continue
             size = sum(manifests[plan["winners"][rel]][rel][0] for rel in need)
             emit("阶段二：推送 %d 个文件到 %s（%s）：%s" % (
                 len(need), member["site"]["name"], common.human_size(size), _brief(need)))
-            detail.append("本机 → %s：%s" % (member["site"]["name"], _brief(need)))
+            detail.append("推送 本机 → %s（%d 个）：%s" % (
+                member["site"]["name"], len(need), _brief(need)))
             remote.transfer(local_member["site"], local_member["dir"],
                             member["site"], member["dir"], need)
             # 目标站的时间同样统一为权威值，保证三站 mtime 完全一致
-            remote.set_mtime(member["site"], member["dir"],
-                             [(rel, manifests[plan["winners"][rel]][rel][1]) for rel in need])
+            try:
+                remote.set_mtime(member["site"], member["dir"],
+                                 [(rel, manifests[plan["winners"][rel]][rel][1]) for rel in need])
+            except remote.RemoteError as exc:
+                emit("统一 %s 文件时间失败（文件已同步，不影响内容）：%s" % (
+                    member["site"]["name"], exc), "warn")
             pushed += len(need)
             bytes_moved += size
         if not pushed:
@@ -626,7 +694,7 @@ def run_group(db, group_id, trigger="manual", log=None):
             emit("阶段三：多数成员已删除，跟随删除 %d 个文件（%s）：%s" % (
                 deleted, "直接删除" if group["delete_policy"] == "purge" else "已移入回收站",
                 _brief(plan["delete"])))
-            detail.append("删除：%s" % _brief(plan["delete"]))
+            detail.append("删除（多数决，%d 个）：%s" % (deleted, _brief(plan["delete"])))
 
         # ---------- 重建基线 ----------
         after = {}

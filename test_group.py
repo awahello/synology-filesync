@@ -252,5 +252,25 @@ for fn in ("target.txt", "keep1.txt", "keep2.txt"):
     stamps = [int(os.stat(DIRS[n] / fn).st_mtime) for n in ("nas", "siteA", "siteC")]
     check("三站 %s 时间一致" % fn, len(set(stamps)) == 1, stamps)
 
+# --- 场景 9：两个站目录被清空 → 不跟随删除，保护本机
+print("\n场景 9：两站扫描到 0 文件 → 不删除本机")
+for name in ("siteA", "siteC"):
+    for p in list(DIRS[name].rglob("*")):
+        if p.is_file():
+            p.unlink()
+stats = sync("两站清空")
+check("本机文件仍在", "target.txt" in tree("nas"), tree("nas"))
+check("统计 deleted=0", stats["deleted"] == 0, stats)
+
+# --- 场景 10：某站改了内容但 mtime 比本机旧（时钟慢）→ 仍以它为准
+print("\n场景 10：站点时钟偏慢时，改过的文件仍胜出")
+for name in ("nas", "siteA", "siteC"):
+    write(DIRS[name] / "clock.txt", "原始", time.time() - 1000)
+sync("建立 clock 基线")
+write(DIRS["siteC"] / "clock.txt", "C 的新内容", time.time() - 5000)
+stats = sync("C 改过但时间更旧")
+check("以 C 的新内容为准", tree("nas")["clock.txt"] == "C 的新内容", tree("nas"))
+check("A 站也被更新", tree("siteA")["clock.txt"] == "C 的新内容", tree("siteA"))
+
 print("\n全部多站测试通过")
 shutil.rmtree(SANDBOX, ignore_errors=True)

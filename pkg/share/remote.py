@@ -11,6 +11,7 @@ rsync 在 OpenWrt 上是可选安装包，因此探测不到 rsync 时自动降�
 """
 
 import fnmatch
+import hashlib
 import os
 import re
 import shlex
@@ -327,15 +328,16 @@ def test_local():
 # 扫描
 # --------------------------------------------------------------------------
 def _server_exclude_args():
-    parts = []
-    for name in SYSTEM_EXCLUDES:
-        parts.append("-not -path './%s/*' -not -name '%s'" % (name, name))
-    return " ".join(parts)
+    # BusyBox 的 find 不认 -not，只认 !（GNU find 两者都认）。
+    # 用 ! 才能同时兼容 OpenWrt 的 BusyBox 和 Linux 的 GNU find。
+    return " ".join("! -path './%s/*'" % name for name in SYSTEM_EXCLUDES)
 
 
 SCAN_SCRIPT_TEMPLATE = (
     "cd __DIR__ 2>/dev/null || { echo 'FS_ERR=目录不存在或无权限'; exit 3; }; "
-    "find . -type f " + _server_exclude_args() + " -exec stat -c '%s|%Y|%n' {} + 2>/dev/null"
+    # OpenWrt 的 BusyBox 常常没有 stat 命令（stat: not found），
+    # 因此改用 ls -l 取大小和时间，GNU 与 BusyBox 都支持。
+    "find . -type f " + _server_exclude_args() + " -exec ls -l {} + 2>/dev/null"
 )
 
 
@@ -374,6 +376,48 @@ def parse_scan_output(text):
     return result
 
 
+def parse_ls_output(text):
+    """解析 `ls -l` 输出（BusyBox 与 GNU 通用）。
+
+    OpenWrt 的 BusyBox 常把 stat 裁掉（stat: not found），只能用 ls -l
+    取大小和修改时间。ls 显示的是本地时区时间，按当前机器时区还原。
+    """
+    import datetime
+    months = {name: i for i, name in enumerate(
+        ("Jan", "Feb", "Mar", "Apr", "May", "Jun",
+         "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"), 1)}
+    now = datetime.datetime.now()
+    result = {}
+    for line in text.splitlines():
+        line = line.rstrip()
+        if not line or line.startswith("total "):
+            continue
+        parts = line.split(None, 8)
+        if len(parts) < 9:
+            continue
+        try:
+            size = int(parts[4])
+            month = months.get(parts[5][:3])
+            if not month:
+                continue
+            day = int(parts[6])
+            clock = parts[7]
+            if ":" in clock:
+                hour, minute = clock.split(":")
+                year = now.year
+                hour, minute, second = int(hour), int(minute), 0
+            else:
+                year = int(clock)
+                hour = minute = second = 0
+            stamp = datetime.datetime(year, month, day, hour, minute, second).timestamp()
+        except (ValueError, TypeError):
+            continue
+        rel = common.norm_rel(parts[8])
+        if rel:
+            result[rel] = (size, int(stamp))
+    return result
+
+
 def scan_remote(site, directory, timeout=600):
     script = SCAN_SCRIPT_TEMPLATE.replace("__DIR__", shlex.quote(directory))
     rc, out, err = run_ssh(site, script, timeout=timeout)
@@ -382,7 +426,7 @@ def scan_remote(site, directory, timeout=600):
     if rc not in (0, 1):
         detail = (err or "").strip().splitlines()
         raise RemoteError((detail[-1] if detail else "扫描失败，ssh 代码 " + str(rc))[:300])
-    return parse_scan_output(out)
+    return parse_ls_output(out)
 
 
 def scan_local(directory):
@@ -414,6 +458,65 @@ def scan_side(site, directory):
     if site["kind"] == "local":
         return scan_local(directory)
     return scan_remote(site, directory)
+
+
+# --------------------------------------------------------------------------
+# 内容哈希：区分「时间不同但内容相同」，避免整批文件被反复重传
+# --------------------------------------------------------------------------
+def hash_local(directory, files):
+    result = {}
+    for rel in files:
+        path = os.path.join(directory, rel)
+        try:
+            digest = hashlib.sha256()
+            with open(path, "rb") as handle:
+                for chunk in iter(lambda: handle.read(1 << 20), b""):
+                    digest.update(chunk)
+            result[rel] = digest.hexdigest()
+        except OSError:
+            continue
+    return result
+
+
+HASH_SCRIPT = (
+    "cd __DIR__ 2>/dev/null || exit 3\n"
+    "for f in __FILES__; do\n"
+    "  if command -v sha256sum >/dev/null 2>&1; then h=$(sha256sum \"$f\" 2>/dev/null);\n"
+    "  elif command -v md5sum >/dev/null 2>&1; then h=$(md5sum \"$f\" 2>/dev/null);\n"
+    "  else h=; fi\n"
+    "  [ -n \"$h\" ] && printf '%s|%s\\n' \"${h%% *}\" \"$f\"\n"
+    "done\n"
+    "echo FS_HASH_DONE\n"
+)
+
+
+def hash_remote(site, directory, files, batch=40, timeout=600):
+    result = {}
+    for start in range(0, len(files), batch):
+        chunk = files[start:start + batch]
+        script = (HASH_SCRIPT
+                  .replace("__DIR__", shlex.quote(directory))
+                  .replace("__FILES__", " ".join(shlex.quote(f) for f in chunk)))
+        rc, out, err = run_ssh(site, script, timeout=timeout)
+        if rc not in (0, 1) or "FS_HASH_DONE" not in out:
+            detail = (err or out or "").strip().splitlines()
+            raise RemoteError("计算文件哈希失败：" + ((detail[-1] if detail else "代码 " + str(rc))[:300]))
+        for line in out.splitlines():
+            if "|" not in line or line.startswith("FS_"):
+                continue
+            digest, _, rel = line.partition("|")
+            rel = common.norm_rel(rel)
+            if rel:
+                result[rel] = digest
+    return result
+
+
+def hash_side(site, directory, files):
+    if not files:
+        return {}
+    if site["kind"] == "local":
+        return hash_local(directory, files)
+    return hash_remote(site, directory, files)
 
 
 # --------------------------------------------------------------------------
@@ -520,11 +623,23 @@ def compile_excludes(text):
 
 
 def is_excluded(rel, patterns):
-    """glob 匹配：不带 / 的模式匹配任意层级文件名，带 / 的匹配整条相对路径。"""
+    """glob 匹配。
+
+    - `xxx`（不带 /）：匹配任意层级的文件名，如 `*.log`、`config.inc.php`
+    - `dir/`（结尾带 /）：匹配该目录及其下所有文件，如 `cache/`
+    - `a/b/*`（中间含 /）：按整条相对路径匹配
+    """
     base = rel.rsplit("/", 1)[-1]
-    for pattern in patterns:
-        if "/" in pattern.rstrip("/"):
-            if fnmatch.fnmatch(rel, pattern):
+    for raw in patterns:
+        pattern = raw.strip()
+        if not pattern:
+            continue
+        dir_rule = pattern.endswith("/")
+        pattern = pattern.rstrip("/")
+        if not pattern:
+            continue
+        if dir_rule or "/" in pattern:
+            if rel == pattern or fnmatch.fnmatch(rel, pattern) or fnmatch.fnmatch(rel, pattern + "/*"):
                 return True
         else:
             if fnmatch.fnmatch(base, pattern) or fnmatch.fnmatch(rel, pattern):
@@ -560,7 +675,7 @@ def rsync_push(site, local_dir, remote_dir, files, timeout=7200):
     list_path = _write_list(files)
     try:
         argv = [
-            RSYNC_BIN, "-rlpt", "--no-owner", "--no-group", "--omit-dir-times",
+            RSYNC_BIN, "-rlpt", "--no-owner", "--no-group",
             "--files-from=" + list_path,
             "-e", _rsync_remote_shell(site),
             local_dir.rstrip("/") + "/",
@@ -582,7 +697,7 @@ def rsync_pull(site, remote_dir, local_dir, files, timeout=7200):
     list_path = _write_list(files)
     try:
         argv = [
-            RSYNC_BIN, "-rlpt", "--no-owner", "--no-group", "--omit-dir-times",
+            RSYNC_BIN, "-rlpt", "--no-owner", "--no-group",
             "--files-from=" + list_path,
             "-e", _rsync_remote_shell(site),
             ssh_target(site) + ":" + remote_dir.rstrip("/") + "/",
@@ -702,7 +817,7 @@ def set_mtime_local(directory, entries):
     return changed
 
 
-def set_mtime_remote(site, directory, entries, batch=150, timeout=600):
+def set_mtime_remote(site, directory, entries, batch=60, timeout=600):
     """把远端文件 mtime 设为指定值。
 
     用 `TZ=UTC touch -t` 而不是 `touch -d @epoch`：BusyBox 的 touch 不支持 @epoch，
@@ -715,7 +830,8 @@ def set_mtime_remote(site, directory, entries, batch=150, timeout=600):
         chunk = entries[start:start + batch]
         lines = ["cd %s 2>/dev/null || exit 3" % shlex.quote(directory)]
         for rel, epoch in chunk:
-            lines.append("TZ=UTC touch -t %s -- %s 2>/dev/null && echo done" % (
+            # BusyBox 的 touch 不认 GNU 的 `--` 结束符，这里不加；同步的文件名不会以 - 开头
+            lines.append("TZ=UTC touch -t %s %s 2>/dev/null && echo done" % (
                 _utc_stamp(epoch), shlex.quote(rel)))
         rc, out, err = run_ssh(site, "\n".join(lines), timeout=timeout)
         total += out.count("done")

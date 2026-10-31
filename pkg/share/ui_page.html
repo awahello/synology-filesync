@@ -97,6 +97,7 @@ button:disabled{opacity:.5;cursor:not-allowed}
 .keybox{background:#0f2233;color:#c9e3f5;border-radius:8px;padding:12px;font:12.5px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;word-break:break-all;user-select:all}
 .logbox{background:#0f2233;color:#c9e3f5;border-radius:8px;padding:12px;font:12.5px/1.7 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;word-break:break-word;max-height:52vh;overflow:auto}
 .logbox .e{color:#ff9d95}.logbox .w{color:#ffd08a}.logbox .g{color:#8fe3b0}
+.logbox .run{padding:6px 0;border-bottom:1px solid rgba(255,255,255,.07)}
 .steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px;margin-top:14px}
 .step{border:1px solid var(--line);border-radius:9px;padding:12px;background:#fbfdfe}
 .step b{display:block;font-size:13.5px;margin-bottom:4px}
@@ -758,7 +759,7 @@ async function groupAction(act, group, btn) {
       try {
         const d = await api('logs', { id: 'group:' + group.id });
         $('logBody').innerHTML = (d.runs || []).map(r =>
-          '<div style="white-space:pre-wrap;word-break:break-all"><span class="' + (r.status === 'error' ? 'e' : r.status === 'ok' ? 'g' : '') + '">[' + esc(r.started) + '] ' +
+          '<div class="run" style="white-space:pre-wrap;word-break:break-all"><span class="' + (r.status === 'error' ? 'e' : r.status === 'ok' ? 'g' : '') + '">[' + esc(r.started) + '] ' +
           esc(r.status === 'ok' ? '成功' : r.status === 'error' ? '失败' : '进行中') + ' ' + esc(r.message) + '</span></div>'
         ).join('') || '暂无记录';
       } catch (e) {
@@ -825,7 +826,7 @@ async function ruleAction(act, rule, btn) {
       try {
         const d = await api('logs', { id: rule.id });
         $('logBody').innerHTML = (d.runs || []).map(r =>
-          '<div style="white-space:pre-wrap;word-break:break-all"><span class="' + (r.status === 'error' ? 'e' : r.status === 'ok' ? 'g' : '') + '">[' + esc(r.started) + '] ' +
+          '<div class="run" style="white-space:pre-wrap;word-break:break-all"><span class="' + (r.status === 'error' ? 'e' : r.status === 'ok' ? 'g' : '') + '">[' + esc(r.started) + '] ' +
           esc(r.status === 'ok' ? '成功' : r.status === 'error' ? '失败' : '进行中') + ' ' + esc(r.message) + '</span></div>'
         ).join('') || '暂无记录';
       } catch (e) {
@@ -1096,7 +1097,7 @@ function previewApi(action, data) {
   const now = new Date();
   const iso = m => new Date(now.getTime() - m * 60000).toISOString();
   const db = {
-    version: '0.2.7-0001',
+    version: '0.3.7-0001',
     settings: { trash_days: '30', conflict_copy: '1', worker_paused: '0' },
     sites: [
       { id: 'local', name: '本机 · DiskStation', kind: 'local', host: '', port: 22, ssh_user: '', key_id: '', note: '', last_check: iso(3), last_ok: 1, last_check_msg: '本机路径可直接访问', caps_json: '{}' },
