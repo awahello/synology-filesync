@@ -227,6 +227,35 @@ head, body = run(["cgi_app.py"], query="action=bootstrap")
 data = json.loads(body)
 check("设置已持久化", data["settings"]["trash_days"] == "7" and data["settings"]["conflict_copy"] == "0", data["settings"])
 
+# ---------------------------------------------------------------- 日志
+print("\n=== 日志接口 ===")
+# 此前 POST_HANDLERS 漏注册 logs，前端点「日志」会一直停在「加载中…」
+import uuid as _uuid
+rule_id = str(_uuid.uuid4())
+group_key = "group:" + str(_uuid.uuid4())
+db = common.connect_db()
+db.execute("INSERT INTO runs(rule_id,started,status,message) VALUES(?,?,?,?)",
+           (rule_id, common.now_iso(), "ok", "规则日志测试"))
+db.execute("INSERT INTO runs(rule_id,started,status,message) VALUES(?,?,?,?)",
+           (group_key, common.now_iso(), "ok", "组日志测试"))
+db.commit()
+
+head, body = run(["cgi_app.py"], method="POST", body={"action": "logs", "id": rule_id},
+                 extra_env={"HTTP_X_CSRF_TOKEN": csrf_token})
+data = json.loads(body)
+check("POST 规则日志成功", data.get("ok") is True, data)
+check("返回规则日志内容", any("规则日志测试" in (r.get("message") or "") for r in data.get("runs", [])), data)
+
+head, body = run(["cgi_app.py"], method="POST", body={"action": "logs", "id": group_key},
+                 extra_env={"HTTP_X_CSRF_TOKEN": csrf_token})
+data = json.loads(body)
+check("POST 组日志成功", data.get("ok") is True, data)
+check("返回组日志内容", any("组日志测试" in (r.get("message") or "") for r in data.get("runs", [])), data)
+
+head, body = run(["cgi_app.py"], method="POST", body={"action": "logs", "id": "../../etc/passwd"},
+                 extra_env={"HTTP_X_CSRF_TOKEN": csrf_token})
+check("非法编号被拒", "400" in head and json.loads(body)["ok"] is False, body)
+
 print("\nCGI 层全部测试通过")
 import shutil
 shutil.rmtree(SANDBOX, ignore_errors=True)

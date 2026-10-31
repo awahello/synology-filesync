@@ -39,7 +39,7 @@ CSRF_PATH = PKG_VAR / "csrf.key"
 PID_PATH = PKG_VAR / "worker.pid"
 LOG_PATH = PKG_VAR / "worker.log"
 
-APP_VERSION = "0.2.4-0001"
+APP_VERSION = "0.2.5-0001"
 AUTH_CGI = "/usr/syno/synoman/webman/modules/authenticate.cgi"
 AUTH_DIAGNOSTIC = "DSM 会话验证未完成。"
 MAX_BODY = 262144

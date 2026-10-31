@@ -753,11 +753,15 @@ async function groupAction(act, group, btn) {
       $('logTitle').textContent = '同步日志 · ' + group.name;
       $('logBody').textContent = '加载中…';
       $('logModal').classList.add('open');
-      const d = await api('logs', { id: 'group:' + group.id });
-      $('logBody').innerHTML = (d.runs || []).map(r =>
-        '<div><span class="' + (r.status === 'error' ? 'e' : r.status === 'ok' ? 'g' : '') + '">[' + esc(r.started) + '] ' +
-        esc(r.status === 'ok' ? '成功' : r.status === 'error' ? '失败' : '进行中') + ' ' + esc(r.message) + '</span></div>'
-      ).join('') || '暂无记录';
+      try {
+        const d = await api('logs', { id: 'group:' + group.id });
+        $('logBody').innerHTML = (d.runs || []).map(r =>
+          '<div><span class="' + (r.status === 'error' ? 'e' : r.status === 'ok' ? 'g' : '') + '">[' + esc(r.started) + '] ' +
+          esc(r.status === 'ok' ? '成功' : r.status === 'error' ? '失败' : '进行中') + ' ' + esc(r.message) + '</span></div>'
+        ).join('') || '暂无记录';
+      } catch (e) {
+        $('logBody').textContent = '日志加载失败：' + e.message;
+      }
     } else if (act === 'edit') {
       editGroup(group);
     } else if (act === 'toggle') {
@@ -816,11 +820,15 @@ async function ruleAction(act, rule, btn) {
       $('logTitle').textContent = '同步日志 · ' + rule.name;
       $('logBody').textContent = '加载中…';
       $('logModal').classList.add('open');
-      const d = await api('logs', { id: rule.id });
-      $('logBody').innerHTML = (d.runs || []).map(r =>
-        '<div><span class="' + (r.status === 'error' ? 'e' : r.status === 'ok' ? 'g' : '') + '">[' + esc(r.started) + '] ' +
-        esc(r.status === 'ok' ? '成功' : r.status === 'error' ? '失败' : '进行中') + ' ' + esc(r.message) + '</span></div>'
-      ).join('') || '暂无记录';
+      try {
+        const d = await api('logs', { id: rule.id });
+        $('logBody').innerHTML = (d.runs || []).map(r =>
+          '<div><span class="' + (r.status === 'error' ? 'e' : r.status === 'ok' ? 'g' : '') + '">[' + esc(r.started) + '] ' +
+          esc(r.status === 'ok' ? '成功' : r.status === 'error' ? '失败' : '进行中') + ' ' + esc(r.message) + '</span></div>'
+        ).join('') || '暂无记录';
+      } catch (e) {
+        $('logBody').textContent = '日志加载失败：' + e.message;
+      }
     } else if (act === 'edit') {
       editRule(rule);
     } else if (act === 'toggle') {
@@ -1078,7 +1086,7 @@ function previewApi(action, data) {
   const now = new Date();
   const iso = m => new Date(now.getTime() - m * 60000).toISOString();
   const db = {
-    version: '0.2.4-0001',
+    version: '0.2.5-0001',
     settings: { trash_days: '30', conflict_copy: '1', worker_paused: '0' },
     sites: [
       { id: 'local', name: '本机 · DiskStation', kind: 'local', host: '', port: 22, ssh_user: '', key_id: '', note: '', last_check: iso(3), last_ok: 1, last_check_msg: '本机路径可直接访问', caps_json: '{}' },

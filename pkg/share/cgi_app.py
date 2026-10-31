@@ -631,6 +631,7 @@ POST_HANDLERS = {
     "toggle_group": api_toggle_group,
     "test_group": api_test_group,
     "browse": api_browse,
+    "logs": api_logs,
     "save_settings": api_save_settings,
 }
 
