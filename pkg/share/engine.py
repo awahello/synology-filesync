@@ -452,12 +452,18 @@ def decide_group(manifests, baseline, delete_follow):
                 plan["winners"][rel] = next(iter(present))
             continue
 
-        # 多版本并存：修改时间最新的胜出，这正是"最新文件"的判定
+        # 多版本并存：修改时间最新的胜出，这正是「最新文件」的判定
         winner_id, winner_meta = max(present.items(), key=lambda kv: kv[1][1])
         plan["winners"][rel] = winner_id
-        for mid, meta in present.items():
-            if mid != winner_id and meta != winner_meta:
-                plan["conflicts"].append((rel, mid))
+        # 只有两个及以上成员都偏离了基线，才算真冲突（多方各改一版）；
+        # 若只有一个成员改过、其余仍是上次同步的版本，那只是单向更新，
+        # 不该给没改的一方留冲突副本。
+        base = baseline.get(rel)
+        changed = [mid for mid, meta in present.items() if base is None or meta != base]
+        if len(changed) >= 2:
+            for mid, meta in present.items():
+                if mid != winner_id and meta != winner_meta:
+                    plan["conflicts"].append((rel, mid))
     return plan
 
 

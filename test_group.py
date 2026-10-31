@@ -227,5 +227,23 @@ after = tree("nas")
 check("预演没有改动本机", before == after, after)
 check("预演统计正确", result["update"] >= 1, result)
 
+# --- 场景 8：三站有多个文件，只改其中一个 → 只传这一个，其余不动
+print("\n场景 8：多文件只改一个 → 只拉取/推送被改的那个")
+sync("先让三站一致（同步预演留下的文件）")
+same_t = time.time() - 600
+for name in ("nas", "siteA", "siteC"):
+    for fn, content in (("keep1.txt", "一"), ("keep2.txt", "二"), ("target.txt", "旧")):
+        write(DIRS[name] / fn, content, same_t)
+stats = sync("建立基线（三站一致，应零传输）")
+check("建立基线时零传输", stats["pulled"] == 0 and stats["pushed"] == 0, stats)
+
+write(DIRS["siteA"] / "target.txt", "新内容", time.time() - 5)
+stats = sync("只改一个文件")
+check("只拉取 1 个、只推送 1 个", stats["pulled"] == 1 and stats["pushed"] == 1, stats)
+check("本机拿到新内容", tree("nas")["target.txt"] == "新内容", tree("nas"))
+check("C 站拿到新内容", tree("siteC")["target.txt"] == "新内容", tree("siteC"))
+check("其余文件未被改动", tree("nas")["keep1.txt"] == "一" and tree("nas")["keep2.txt"] == "二",
+      tree("nas"))
+
 print("\n全部多站测试通过")
 shutil.rmtree(SANDBOX, ignore_errors=True)
