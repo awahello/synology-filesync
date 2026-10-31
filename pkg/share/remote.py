@@ -339,6 +339,19 @@ SCAN_SCRIPT_TEMPLATE = (
 )
 
 
+def norm_mtime(value):
+    """统一 mtime 精度为整数秒。
+
+    远端 `stat -c '%Y'` 返回整数秒，而本机 `st_mtime` 带小数。若不统一，同一个
+    文件在两端比较 `(size, mtime)` 时永远不相等，结果就是每轮都把「没变」的文件
+    重新拉取/推送一遍。统一到整数秒后，内容一致的文件才会被判为一致、跳过传输。
+    """
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return 0
+
+
 def parse_scan_output(text):
     """解析 size|mtime|path，path 允许包含 | 字符（只切前两段）。"""
     result = {}
@@ -351,7 +364,7 @@ def parse_scan_output(text):
         size_s, mtime_s, path = parts
         try:
             size = int(size_s)
-            mtime = float(mtime_s)
+            mtime = norm_mtime(mtime_s)
         except ValueError:
             continue
         rel = common.norm_rel(path)
@@ -392,7 +405,8 @@ def scan_local(directory):
                 continue
             if not os.path.isfile(full) or os.path.islink(full):
                 continue
-            result[prefix + name] = (st.st_size, float(st.st_mtime))
+            # 与远端 stat %Y 对齐到整数秒，否则两端比较永远不相等、每轮都重传
+            result[prefix + name] = (st.st_size, norm_mtime(st.st_mtime))
     return result
 
 

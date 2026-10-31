@@ -58,7 +58,11 @@ def load_rule(db, rule_id):
 def load_baseline(db, rule_id):
     result = {}
     for row in db.execute("SELECT rel,a_size,a_mtime,b_size,b_mtime FROM baseline WHERE rule_id=?", (rule_id,)):
-        result[row["rel"]] = (row["a_size"], row["a_mtime"], row["b_size"], row["b_mtime"])
+        # 旧版本存过带小数的 mtime，这里统一到整数秒，避免和新扫描结果比不相等
+        result[row["rel"]] = (
+            row["a_size"], remote.norm_mtime(row["a_mtime"]),
+            row["b_size"], remote.norm_mtime(row["b_mtime"]),
+        )
     return result
 
 
@@ -225,10 +229,13 @@ def run_rule(db, rule_id, trigger="manual", log=None):
 
         baseline = load_baseline(db, rule_id)
         plan = decide(man_a, man_b, baseline, rule["mode"], delete_follow)
-        emit("计划：A→B %d 个，B→A %d 个，删除 %d 个，冲突 %d 个，已一致 %d 个" % (
-            len(plan["a2b"]), len(plan["b2a"]),
-            len(plan["del_a"]) + len(plan["del_b"]),
-            len(plan["conflicts"]), plan["same"]))
+        if not plan["a2b"] and not plan["b2a"] and not plan["del_a"] and not plan["del_b"]:
+            emit("两端内容一致：%d 个文件全部已是最新，本轮只扫描检查，不传输" % plan["same"], "good")
+        else:
+            emit("计划：A→B %d 个，B→A %d 个，删除 %d 个，冲突 %d 个，已一致 %d 个（不动）" % (
+                len(plan["a2b"]), len(plan["b2a"]),
+                len(plan["del_a"]) + len(plan["del_b"]),
+                len(plan["conflicts"]), plan["same"]))
 
         # 冲突覆盖前先保留败方副本，避免"最新优先"直接抹掉另一边的改动
         if plan["conflicts"] and settings.get("conflict_copy") == "1":
@@ -301,9 +308,10 @@ def run_rule(db, rule_id, trigger="manual", log=None):
             "bytes": bytes_moved,
             "conflicts": len(plan["conflicts"]),
             "leftover": leftover,
+            "same": plan["same"],
         }
-        message = "A→B %d，B→A %d，删除 %d，冲突 %d" % (
-            stats["up"], stats["down"], stats["deleted"], stats["conflicts"])
+        message = "A→B %d，B→A %d，删除 %d，冲突 %d，未变 %d" % (
+            stats["up"], stats["down"], stats["deleted"], stats["conflicts"], plan["same"])
         db.execute(
             "UPDATE runs SET finished=?,status='ok',up_count=?,down_count=?,del_count=?,bytes=?,message=? WHERE id=?",
             (common.now_iso(), stats["up"], stats["down"], stats["deleted"], bytes_moved, message, run_id),
@@ -380,7 +388,7 @@ def load_group_members(db, group_id):
 
 def load_group_baseline(db, group_id):
     return {
-        row["rel"]: (row["size"], row["mtime"])
+        row["rel"]: (row["size"], remote.norm_mtime(row["mtime"]))
         for row in db.execute("SELECT rel,size,mtime FROM group_baseline WHERE group_id=?", (group_id,))
     }
 
@@ -501,8 +509,11 @@ def run_group(db, group_id, trigger="manual", log=None):
 
         baseline = load_group_baseline(db, group_id)
         plan = decide_group(manifests, baseline, delete_follow)
-        emit("决策：%d 个文件需更新，%d 个待删除，%d 个冲突，%d 个已一致" % (
-            len(plan["winners"]), len(plan["delete"]), len(plan["conflicts"]), plan["same"]))
+        if not plan["winners"] and not plan["delete"]:
+            emit("三站内容一致：%d 个文件全部已是最新，本轮只扫描检查，不拉取也不推送" % plan["same"], "good")
+        else:
+            emit("决策：%d 个文件需更新，%d 个已一致（不动），%d 个待删除，%d 个冲突" % (
+                len(plan["winners"]), plan["same"], len(plan["delete"]), len(plan["conflicts"])))
 
         # ---------- 冲突副本 ----------
         if plan["conflicts"] and settings.get("conflict_copy") == "1":
@@ -619,9 +630,10 @@ def run_group(db, group_id, trigger="manual", log=None):
             "conflicts": len(plan["conflicts"]),
             "bytes": bytes_moved,
             "leftover": leftover,
+            "same": plan["same"],
         }
-        message = "拉回 %d，推送 %d，删除 %d，冲突 %d" % (
-            pulled, pushed, deleted, len(plan["conflicts"]))
+        message = "拉回 %d，推送 %d，删除 %d，冲突 %d，未变 %d" % (
+            pulled, pushed, deleted, len(plan["conflicts"]), plan["same"])
         db.execute(
             "UPDATE runs SET finished=?,status='ok',up_count=?,down_count=?,del_count=?,bytes=?,message=? WHERE id=?",
             (common.now_iso(), pushed, pulled, deleted, bytes_moved, message, run_id),
