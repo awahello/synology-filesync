@@ -4,7 +4,7 @@
 
 **只传有变化的文件；三站时间强制一致；三站都没更新时只扫描、不传输。**
 
-**版本 0.3.29** · 平台 DSM 7.x · 架构 x86_64 · 作者 [AWA](https://www.akkdiy.cn)
+**版本 0.3.30** · 平台 DSM 7.x · 架构 x86_64 · 作者 [AWA](https://www.akkdiy.cn)
 
 ![界面截图](docs/screenshots/main.png)
 

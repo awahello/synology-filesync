@@ -282,6 +282,17 @@ check("开机任务失败仍会重试", bool(sourcebackup.next_run_after(False, 
 sourcebackup.initialize_schedule(db)  # 同一次开机再启动一次（套件重启）
 boot_row = db.execute("SELECT next_run FROM source_backups WHERE id=?", (row["id"],)).fetchone()
 check("同一次开机不重复排期", boot_row["next_run"] == first, boot_row["next_run"])
+# 跑完（next_run 为空）后不能再被调度，否则就是「每轮备份一次」的无限循环
+db.execute("UPDATE source_backups SET next_run='', schedule_kind='boot' WHERE id=?", (row["id"],))
+db.commit()
+due_ids = [r["id"] for r in sourcebackup.due_tasks(db)]
+check("开机任务跑完不再被调度", row["id"] not in due_ids, due_ids)
+
+# 普通任务 next_run 为空仍要补跑一轮（刚建/刚启用）
+db.execute("UPDATE source_backups SET schedule_kind='daily', next_run='' WHERE id=?", (row["id"],))
+db.commit()
+due_ids = [r["id"] for r in sourcebackup.due_tasks(db)]
+check("普通任务 next_run 为空会补跑", row["id"] in due_ids, due_ids)
 
 # ---------------------------------------------------------------- 开关与删除
 print("\n=== 启用 / 停用 / 删除 ===")

@@ -372,12 +372,20 @@ def initialize_schedule(db):
 
 
 def due_tasks(db):
-    """返回到点该跑的任务行。next_run 为空（刚建/刚启用）也当作到点。"""
+    """返回到点该跑的任务行。
+
+    next_run 为空有两种含义：刚建/刚启用（要立刻补一轮），或开机型任务已经
+    跑完了（必须跳过）。不区分的话，开机备份会跑完又被捞出来，变成无限循环。
+    """
     now = common.now_local()
     result = []
     for row in db.execute("SELECT * FROM source_backups WHERE enabled=1 ORDER BY created"):
         due = common.parse_iso(row["next_run"])
-        if due is None or due <= now:
+        if due is None:
+            if (row["schedule_kind"] or DEFAULT_KIND) == "boot":
+                continue
+            result.append(row)
+        elif due <= now:
             result.append(row)
     return result
 
