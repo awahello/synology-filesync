@@ -272,6 +272,13 @@ sourcebackup.initialize_schedule(db)
 boot_row = db.execute("SELECT next_run FROM source_backups WHERE id=?", (row["id"],)).fetchone()
 first = boot_row["next_run"]
 check("开机任务按延迟排期（默认 30 分钟）", bool(first), first)
+
+# 开机任务跑完必须清空 next_run，否则会变成「每 N 分钟备份一次」
+task_row = db.execute("SELECT * FROM source_backups WHERE id=?", (row["id"],)).fetchone()
+check("开机任务成功后清空下次执行", sourcebackup.next_run_after(True, task_row) == "",
+      sourcebackup.next_run_after(True, task_row))
+check("开机任务失败仍会重试", bool(sourcebackup.next_run_after(False, task_row)),
+      sourcebackup.next_run_after(False, task_row))
 sourcebackup.initialize_schedule(db)  # 同一次开机再启动一次（套件重启）
 boot_row = db.execute("SELECT next_run FROM source_backups WHERE id=?", (row["id"],)).fetchone()
 check("同一次开机不重复排期", boot_row["next_run"] == first, boot_row["next_run"])

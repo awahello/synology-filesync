@@ -748,6 +748,15 @@ function renderRuleSelects() {
   }
 }
 
+// 下次执行时间：开机型任务跑完后 next_run 是空的，直接写「未排期」会让人以为坏了
+function nextRunLabel(row) {
+  if (row.next_run) return fmtTime(row.next_run);
+  if ((row.schedule_kind || 'interval') === 'boot') {
+    return '下次开机后 ' + (row.boot_delay_min || 30) + ' 分钟';
+  }
+  return '未排期';
+}
+
 function renderRules() {
   const box = $('ruleList');
   box.replaceChildren();
@@ -758,7 +767,7 @@ function renderRules() {
     const statusBadge = r.last_status === 'ok' ? '<span class="badge ok">正常</span>'
       : r.last_status === 'error' ? '<span class="badge err">失败</span>'
       : r.last_status === 'running' ? '<span class="badge run">同步中</span>' : '<span class="badge off">等待首轮</span>';
-    const next = r.next_run ? fmtTime(r.next_run) : '未排期';
+    const next = nextRunLabel(r);
     const arrow = r.mode === 'a2b' ? '→' : r.mode === 'b2a' ? '←' : '⇄';
     const schedule = scheduleText(r);
     const backup = r.backup_enabled
@@ -1027,7 +1036,7 @@ function renderGroups() {
       '<div class="meta" style="margin-top:6px">' + (slotCount > 1 ? slotCount + ' 组目录 · ' : '') +
       g.members.length + ' 个成员 · ' + schedule + ' · 删除：' +
       esc(deleteText(g.delete_policy)) + backup + '<br>上次：' + fmtTime(g.last_run) + ' · ' + esc(g.last_message || '尚未执行') +
-      '<br>下次：' + esc(g.next_run ? fmtTime(g.next_run) : '未排期') + '</div></div>' +
+      '<br>下次：' + esc(nextRunLabel(g)) + '</div></div>' +
       '<div class="ops">' +
       '<button data-act="run">立即同步</button>' +
       (g.backup_enabled ? '<button class="secondary" data-act="backup">立即备份</button>' : '') +
@@ -1218,7 +1227,7 @@ function renderSourceBackups() {
       ' → 备份：<code>' + esc(t.target_dir) + '</code><br>' +
       esc(sourceScheduleText(t)) + ' · 保留 ' + (t.keep > 0 ? t.keep + ' 份' : '不限份数') +
       ' · 上次：' + fmtTime(t.last_run) + ' · ' + esc(t.last_msg || '尚未备份') + '<br>' +
-      '下次：' + esc(t.next_run ? fmtTime(t.next_run) : '未排期') +
+      '下次：' + esc(nextRunLabel(t)) +
       (packs ? '<br>最近备份：<br>' + packs : '') + '</div></div>' +
       '<div class="ops">' +
       '<button data-act="run">立即备份</button>' +

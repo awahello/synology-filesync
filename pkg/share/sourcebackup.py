@@ -383,8 +383,15 @@ def due_tasks(db):
 
 
 def next_run_after(ok, row):
-    """成功按规则排下一轮；失败 30 分钟后再试，避免网络抖动拖一整天。"""
+    """成功按规则排下一轮；失败 30 分钟后再试，避免网络抖动拖一整天。
+
+    「开机后备份」成功后必须把 next_run 清空——它只在开机时跑一次，
+    若照 scheduled_after 排（now + 开机延迟）就会变成「每 N 分钟备份一次」，
+    0.3.27 就是这里漏判，导致设了开机 10 分钟却每 10 分钟跑一轮。
+    """
     now = common.now_local()
     if ok:
+        if (row["schedule_kind"] or DEFAULT_KIND) == "boot":
+            return ""
         return _iso(scheduled_after(row, now))
     return _iso(now + dt.timedelta(minutes=RETRY_MINUTES))
