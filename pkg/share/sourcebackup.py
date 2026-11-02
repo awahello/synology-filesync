@@ -26,7 +26,6 @@ import shlex
 import shutil
 import subprocess
 import time
-from pathlib import Path
 
 import archive
 import common
@@ -267,6 +266,13 @@ def run_task(db, row, log=None):
         "保留 %d 份" % keep if keep > 0 else "不限份数",
         "，清理 %d 份旧包" % removed if removed else "")
     _save_result(db, task_id, "ok", message)
+    # 记下「本次开机已经备份过」，套件重启后不会再跑一次
+    try:
+        db.execute("UPDATE source_backups SET boot_done=? WHERE id=?",
+                   (common.boot_stamp(), task_id))
+        db.commit()
+    except Exception:  # noqa: BLE001 - 记标记失败不影响备份结果
+        pass
     _log_run(db, task_id, "ok", "源码备份成功：%s → %s" % (where, os.path.join(target, name)))
     emit("源码备份完成：" + message, "good")
     return {"name": name, "path": final, "size": size, "removed": removed,
@@ -335,39 +341,37 @@ def _iso(value):
     return value.astimezone().isoformat(timespec="seconds")
 
 
-def _boot_stamp():
-    """本次开机的标识：套件重启不会重复触发「开机后备份」。"""
-    try:
-        return Path("/proc/sys/kernel/random/boot_id").read_text(encoding="ascii").strip()
-    except OSError:
-        return "boot-" + time.strftime("%Y-%m-%d")
-
-
-def initialize_schedule(db):
+def initialize_schedule(db, log=None):
     """套件启动时重排计划。
 
-    * boot 类型：只在「新的开机」排一次（5 分钟后），套件重启不会重复备份；
-    * 其它类型：next_run 为空或已过期就按规则重算，还没到点的不动。
+    boot 型任务用 `boot_done` 记「哪一次开机已经跑过」：
+
+    * 本次开机还没跑过 → 排一次（now + 开机延迟），套件重启/升级后也会补上；
+    * 本次开机跑过了   → 跳过，套件重启不会重复备份。
+
+    以前只认「开机标识变了才排」，结果套件重启（标识没变）时任务既跑完了
+    next_run 又被清空，就一直不跑——用户看到的「开机后没按设置时间运行」。
     """
     now = common.now_local()
-    boot = _boot_stamp()
-    row = db.execute("SELECT value FROM settings WHERE key='srcbak_boot'").fetchone()
-    new_boot = not row or row["value"] != boot
+    boot = common.boot_stamp()
     for task in db.execute("SELECT * FROM source_backups WHERE enabled=1 ORDER BY created").fetchall():
         kind = task["schedule_kind"] or DEFAULT_KIND
+        due = common.parse_iso(task["next_run"])
         if kind == "boot":
-            if not new_boot:
-                continue
+            if (task["boot_done"] or "") == boot:
+                continue  # 本次开机已经跑过
+            if due is not None and due > now:
+                continue  # 已经排了未来的时间
             target = scheduled_after(task, now)
+            if log:
+                log("源码备份「%s」开机排期：%d 分钟后（%s）" % (
+                    task["name"], max(1, int(task["boot_delay_min"] or DEFAULT_BOOT_DELAY)),
+                    _iso(target)))
         else:
-            due = common.parse_iso(task["next_run"])
             if due is not None and due > now:
                 continue
             target = scheduled_after(task, now)
         db.execute("UPDATE source_backups SET next_run=? WHERE id=?", (_iso(target), task["id"]))
-    if new_boot:
-        db.execute("INSERT INTO settings(key,value) VALUES('srcbak_boot',?) "
-                   "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (boot,))
     db.commit()
 
 

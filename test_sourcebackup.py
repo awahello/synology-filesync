@@ -265,7 +265,8 @@ check("失败后 30 分钟重试",
 
 # ---------------------------------------------------------------- 开机排期
 print("\n=== 开机后备份 ===")
-db.execute("UPDATE source_backups SET schedule_kind='boot', next_run='', enabled=1 WHERE id=?", (row["id"],))
+db.execute("UPDATE source_backups SET schedule_kind='boot', boot_done='', next_run='', "
+           "enabled=1 WHERE id=?", (row["id"],))
 db.execute("DELETE FROM settings WHERE key='srcbak_boot'")
 db.commit()
 sourcebackup.initialize_schedule(db)
@@ -282,6 +283,31 @@ check("开机任务失败仍会重试", bool(sourcebackup.next_run_after(False, 
 sourcebackup.initialize_schedule(db)  # 同一次开机再启动一次（套件重启）
 boot_row = db.execute("SELECT next_run FROM source_backups WHERE id=?", (row["id"],)).fetchone()
 check("同一次开机不重复排期", boot_row["next_run"] == first, boot_row["next_run"])
+# 套件重启（开机标识没变）vs 系统重启（标识变了）
+print("\n=== 套件重启 / 系统重启 ===")
+orig_boot = common.boot_stamp
+try:
+    common.boot_stamp = lambda: "boot-A"
+    db.execute("UPDATE source_backups SET schedule_kind='boot', boot_done='', next_run='' WHERE id=?",
+               (row["id"],))
+    db.commit()
+    sourcebackup.initialize_schedule(db)
+    r = db.execute("SELECT next_run FROM source_backups WHERE id=?", (row["id"],)).fetchone()
+    check("本次开机还没跑过 → 排期", bool(r["next_run"]), r["next_run"])
+
+    db.execute("UPDATE source_backups SET boot_done='boot-A', next_run='' WHERE id=?", (row["id"],))
+    db.commit()
+    sourcebackup.initialize_schedule(db)
+    r = db.execute("SELECT next_run FROM source_backups WHERE id=?", (row["id"],)).fetchone()
+    check("本次开机已跑过 → 套件重启不重排", r["next_run"] == "", r["next_run"])
+
+    common.boot_stamp = lambda: "boot-B"
+    sourcebackup.initialize_schedule(db)
+    r = db.execute("SELECT next_run FROM source_backups WHERE id=?", (row["id"],)).fetchone()
+    check("换了一次开机 → 重新排期", bool(r["next_run"]), r["next_run"])
+finally:
+    common.boot_stamp = orig_boot
+
 # 跑完（next_run 为空）后不能再被调度，否则就是「每轮备份一次」的无限循环
 db.execute("UPDATE source_backups SET next_run='', schedule_kind='boot' WHERE id=?", (row["id"],))
 db.commit()

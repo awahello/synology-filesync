@@ -75,6 +75,7 @@ def rule_public(row):
         "schedule_kind": row["schedule_kind"] or common.DEFAULT_SCHEDULE_KIND,
         "run_time": row["run_time"], "weekday": row["weekday"],
         "boot_delay_min": row["boot_delay_min"],
+        "boot_done": row["boot_done"],
         "interval_min": row["interval_min"],
         "start_delay_min": row["start_delay_min"], "retry_min": row["retry_min"],
         "backup_enabled": row["backup_enabled"], "backup_dir": row["backup_dir"],
@@ -475,7 +476,7 @@ def api_save_rule(db, req):
             "start_delay_min=?,"
             "retry_min=?,backup_enabled=?,backup_dir=?,"
             "backup_keep=?,backup_interval_hour=?,backup_delay_min=?,backup_due_at='',backup_force=0,"
-            "next_run=? WHERE id=?",
+            "boot_done='',next_run=? WHERE id=?",
             (name, site_a, dir_a, site_b, dir_b, mode, delete_policy, excludes,
              kind, run_time, weekday, boot_delay, interval,
              start_delay, retry, backup_enabled, backup_dir, backup_keep, backup_hour,
@@ -569,6 +570,7 @@ def group_public(db, row):
         "schedule_kind": row["schedule_kind"] or common.DEFAULT_SCHEDULE_KIND,
         "run_time": row["run_time"], "weekday": row["weekday"],
         "boot_delay_min": row["boot_delay_min"],
+        "boot_done": row["boot_done"],
         "interval_min": row["interval_min"],
         "start_delay_min": row["start_delay_min"], "retry_min": row["retry_min"],
         "backup_enabled": row["backup_enabled"], "backup_dir": row["backup_dir"],
@@ -591,6 +593,7 @@ def source_public(row):
         "schedule_kind": row["schedule_kind"] or sourcebackup.DEFAULT_KIND,
         "run_time": row["run_time"], "weekday": row["weekday"],
         "boot_delay_min": row["boot_delay_min"],
+        "boot_done": row["boot_done"],
         "interval_hour": row["interval_hour"], "keep": row["keep"],
         "excludes": row["excludes"], "enabled": row["enabled"],
         "next_run": row["next_run"], "last_run": row["last_run"],
@@ -675,7 +678,7 @@ def api_save_group(db, req):
             "UPDATE groups SET name=?,delete_policy=?,excludes=?,schedule_kind=?,run_time=?,"
             "weekday=?,boot_delay_min=?,interval_min=?,start_delay_min=?,"
             "retry_min=?,backup_enabled=?,backup_dir=?,backup_keep=?,backup_interval_hour=?,"
-            "backup_delay_min=?,backup_due_at='',backup_force=0,next_run=? WHERE id=?",
+            "backup_delay_min=?,backup_due_at='',backup_force=0,boot_done='',next_run=? WHERE id=?",
             (name, delete_policy, excludes, kind, run_time, weekday, boot_delay, interval,
              start_delay, retry,
              backup_enabled, backup_dir, backup_keep, backup_hour, backup_delay, next_at, group_id),
@@ -862,8 +865,8 @@ def api_save_source_backup(db, req):
         _source_row(db, task_id)
         db.execute(
             "UPDATE source_backups SET name=?,site_id=?,src_dir=?,target_dir=?,schedule_kind=?,"
-            "run_time=?,weekday=?,boot_delay_min=?,interval_hour=?,keep=?,excludes=?,next_run=? "
-            "WHERE id=?",
+            "run_time=?,weekday=?,boot_delay_min=?,interval_hour=?,keep=?,excludes=?,boot_done='',"
+            "next_run=? WHERE id=?",
             (name, site_id, src, target, kind, run_time, weekday, boot_delay, interval, keep,
              excludes, next_at, task_id),
         )

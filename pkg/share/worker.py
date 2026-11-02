@@ -28,8 +28,6 @@ try:  # Windows 上没有 fcntl，仅影响本地调试，DSM 上始终可用
 except ImportError:  # pragma: no cover
     fcntl = None
 
-from pathlib import Path
-
 import common
 import engine
 import localroot
@@ -55,14 +53,6 @@ def compute_next(minutes, base=None):
     base = base or common.now_local()
     minutes = max(1, int(minutes or 10))
     return (base + dt.timedelta(minutes=minutes)).isoformat(timespec="seconds")
-
-
-def _boot_stamp():
-    """本次开机的标识，用来保证「开机后执行」每次开机只跑一次（套件重启不重复）。"""
-    try:
-        return Path("/proc/sys/kernel/random/boot_id").read_text(encoding="ascii").strip()
-    except OSError:
-        return "boot-" + time.strftime("%Y-%m-%d")
 
 
 def next_run_after(db, kind, task_id, ok):
@@ -164,17 +154,18 @@ def initialize_schedule(db):
     """
     now = common.now_local()
     offset = 0
-    boot = _boot_stamp()
-    prior = db.execute("SELECT value FROM settings WHERE key='sync_boot'").fetchone()
-    new_boot = not prior or prior["value"] != boot
+    boot = common.boot_stamp()
     for table in ("rules", "groups"):
         for row in db.execute("SELECT * FROM %s WHERE enabled=1 ORDER BY created" % table).fetchall():
             schedule = common.row_get(row, "schedule_kind", "interval") or "interval"
             due = common.parse_iso(row["next_run"])
             if schedule == "boot":
-                # 开机后执行：每次开机排一次，套件重启不重复触发。
-                # 延迟可配（默认 30 分钟），开机时磁盘/网络都在忙，太早跑容易卡住
-                if not new_boot:
+                # 开机后执行：用 boot_done 记「本次开机跑过没有」。
+                # 只认「开机标识变了」的话，套件重启时任务既跑完了 next_run 又是空的，
+                # 会一直不跑（用户反馈的「开机后没按设置时间运行」就是这个）。
+                if (common.row_get(row, "boot_done", "") or "") == boot:
+                    continue
+                if due is not None and due > now:
                     continue
                 try:
                     delay = max(1, int(row["boot_delay_min"] or 30))
@@ -192,9 +183,6 @@ def initialize_schedule(db):
                 target = (now + dt.timedelta(minutes=delay, seconds=5 + offset)).isoformat(timespec="seconds")
             db.execute("UPDATE %s SET next_run=? WHERE id=?" % table, (target, row["id"]))
             offset += STARTUP_STAGGER
-    if new_boot:
-        db.execute("INSERT INTO settings(key,value) VALUES('sync_boot',?) "
-                   "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (boot,))
     db.commit()
 
 
@@ -248,6 +236,12 @@ def run_task(db, kind, row):
             next_at, note = compute_next(10), ""
             log("计算下一轮时间失败，按 10 分钟排期：%s" % exc)
         db.execute("UPDATE %s SET next_run=? WHERE id=?" % table, (next_at, task_id))
+        if ok:
+            try:
+                db.execute("UPDATE %s SET boot_done=? WHERE id=?" % table,
+                           (common.boot_stamp(), task_id))
+            except Exception:  # noqa: BLE001 - 记标记失败不影响同步结果
+                pass
         db.commit()
         if note:
             log("%s「%s」%s" % (label, row["name"], note))
@@ -373,7 +367,7 @@ def main():
     initialize_schedule(db)
     # 源码备份按「每天/每周/间隔/开机后」排期，规则和同步任务不同，单独处理
     try:
-        sourcebackup.initialize_schedule(db)
+        sourcebackup.initialize_schedule(db, log=lambda lv, m: log(m))
     except Exception as exc:  # noqa: BLE001 - 排期失败不能让整个调度进程起不来
         log("源码备份排期失败：%s" % exc)
 

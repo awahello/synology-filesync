@@ -255,4 +255,11 @@ worker.initialize_schedule(db)  # 同一次开机再启动，不应重排
 row2 = db.execute("SELECT next_run FROM groups WHERE id=?", (gid,)).fetchone()
 check("同一次开机不重复排期", row2["next_run"] == row["next_run"], row2["next_run"])
 
+# 本次开机已经跑过（boot_done 等于当前开机标识）→ 套件重启也不能重排
+db.execute("UPDATE groups SET boot_done=?, next_run='' WHERE id=?", (common.boot_stamp(), gid))
+db.commit()
+worker.initialize_schedule(db)
+row3 = db.execute("SELECT next_run FROM groups WHERE id=?", (gid,)).fetchone()
+check("本次开机已跑过 → 不重排", row3["next_run"] == "", row3["next_run"])
+
 print("\n多组目录与执行方式测试全部通过")

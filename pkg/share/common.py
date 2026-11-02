@@ -39,7 +39,7 @@ CSRF_PATH = PKG_VAR / "csrf.key"
 PID_PATH = PKG_VAR / "worker.pid"
 LOG_PATH = PKG_VAR / "worker.log"
 
-APP_VERSION = "0.3.30-0001"
+APP_VERSION = "0.3.31-0001"
 AUTH_CGI = "/usr/syno/synoman/webman/modules/authenticate.cgi"
 AUTH_DIAGNOSTIC = "DSM 会话验证未完成。"
 MAX_BODY = 262144
@@ -102,6 +102,7 @@ CREATE TABLE IF NOT EXISTS rules (
     run_time      TEXT NOT NULL DEFAULT '02:00',      -- daily、weekly 的执行时刻
     weekday       INTEGER NOT NULL DEFAULT 0,         -- weekly：0=周一 … 6=周日
     boot_delay_min INTEGER NOT NULL DEFAULT 30,       -- boot：开机后等多久再跑
+    boot_done     TEXT NOT NULL DEFAULT '',           -- boot：本次开机是否已跑过（存 boot_id）
     interval_min  INTEGER NOT NULL DEFAULT 10,
     start_delay_min INTEGER NOT NULL DEFAULT 0,
     retry_min     INTEGER NOT NULL DEFAULT 60,
@@ -160,6 +161,7 @@ CREATE TABLE IF NOT EXISTS groups (
     run_time      TEXT NOT NULL DEFAULT '02:00',
     weekday       INTEGER NOT NULL DEFAULT 0,
     boot_delay_min INTEGER NOT NULL DEFAULT 30,
+    boot_done     TEXT NOT NULL DEFAULT '',
     interval_min  INTEGER NOT NULL DEFAULT 10,
     start_delay_min INTEGER NOT NULL DEFAULT 0,
     retry_min     INTEGER NOT NULL DEFAULT 60,
@@ -212,6 +214,7 @@ CREATE TABLE IF NOT EXISTS source_backups (
     run_time      TEXT NOT NULL DEFAULT '02:00',   -- daily、weekly 的执行时刻
     weekday       INTEGER NOT NULL DEFAULT 0,      -- weekly：0=周一 … 6=周日
     boot_delay_min INTEGER NOT NULL DEFAULT 30,    -- boot：开机后等多久再备份
+    boot_done     TEXT NOT NULL DEFAULT '',        -- boot：本次开机是否已跑过（存 boot_id）
     interval_hour INTEGER NOT NULL DEFAULT 24,     -- interval：每几小时
     keep          INTEGER NOT NULL DEFAULT 7,      -- 0 = 不限份数
     excludes      TEXT NOT NULL DEFAULT '',
@@ -243,6 +246,7 @@ MIGRATIONS = {
         "run_time": "TEXT NOT NULL DEFAULT '02:00'",
         "weekday": "INTEGER NOT NULL DEFAULT 0",
         "boot_delay_min": "INTEGER NOT NULL DEFAULT 30",
+        "boot_done": "TEXT NOT NULL DEFAULT ''",
         "start_delay_min": "INTEGER NOT NULL DEFAULT 0",
         "retry_min": "INTEGER NOT NULL DEFAULT 60",
         "backup_enabled": "INTEGER NOT NULL DEFAULT 0",
@@ -264,12 +268,14 @@ MIGRATIONS = {
         "run_time": "TEXT NOT NULL DEFAULT '02:00'",
         "weekday": "INTEGER NOT NULL DEFAULT 0",
         "boot_delay_min": "INTEGER NOT NULL DEFAULT 30",
+        "boot_done": "TEXT NOT NULL DEFAULT ''",
     },
     "groups": {
         "schedule_kind": "TEXT NOT NULL DEFAULT 'interval'",
         "run_time": "TEXT NOT NULL DEFAULT '02:00'",
         "weekday": "INTEGER NOT NULL DEFAULT 0",
         "boot_delay_min": "INTEGER NOT NULL DEFAULT 30",
+        "boot_done": "TEXT NOT NULL DEFAULT ''",
         "start_delay_min": "INTEGER NOT NULL DEFAULT 0",
         "retry_min": "INTEGER NOT NULL DEFAULT 60",
         "backup_enabled": "INTEGER NOT NULL DEFAULT 0",
@@ -434,6 +440,18 @@ def row_get(row, key, default=None):
     except (KeyError, IndexError, TypeError):
         return default
     return default if value is None else value
+
+
+def boot_stamp():
+    """本次开机的标识：只有真正重启系统才变，套件重启不变。
+
+    「开机后执行」用它判断本次开机是否已经跑过，避免套件重启后重复执行，
+    也避免套件重启后彻底不跑（只认「开机标识变了」就会漏掉后一种情况）。
+    """
+    try:
+        return Path("/proc/sys/kernel/random/boot_id").read_text(encoding="ascii").strip()
+    except OSError:
+        return "boot-" + dt.datetime.now().strftime("%Y-%m-%d")
 
 
 def parse_clock(value):
