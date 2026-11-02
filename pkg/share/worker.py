@@ -365,9 +365,10 @@ def main():
         return 1
 
     initialize_schedule(db)
-    # 源码备份按「每天/每周/间隔/开机后」排期，规则和同步任务不同，单独处理
+    # 源码备份按「每天/每周/间隔/开机后」排期，规则和同步任务不同，单独处理。
+    # 注意 initialize_schedule 的 log 是单参数（log(message)），不能传 (level, message)。
     try:
-        sourcebackup.initialize_schedule(db, log=lambda lv, m: log(m))
+        sourcebackup.initialize_schedule(db, log=lambda m: log(m))
     except Exception as exc:  # noqa: BLE001 - 排期失败不能让整个调度进程起不来
         log("源码备份排期失败：%s" % exc)
 
