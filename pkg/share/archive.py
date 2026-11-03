@@ -139,19 +139,23 @@ def _os_error_text(exc, target_dir):
         except AttributeError:  # pragma: no cover
             uid = -1
         detail = "当前进程 uid=%d" % uid
+        owner = None
         try:
             st = os.stat(target_dir)
-            detail += "，目标目录属主 uid=%d、权限 %o" % (st.st_uid, st.st_mode & 0o777)
+            owner = st.st_uid
+            detail += "，目标目录属主 uid=%d、权限 %o" % (owner, st.st_mode & 0o777)
         except OSError:
             pass
         if uid == 0:
-            return ("没有权限写入备份目录（%s）。root 也写不进去，通常是目录或其上级的 ACL 限制——"
-                    "请在该文件夹「属性→权限」里给 root（或 Everyone）读写，"
-                    "或把备份目录换到 /volume1 下的普通共享文件夹" % detail)
-        return ("没有权限写入备份目录（%s）。调度进程没以 root 运行，两种修法任选其一——"
-                "① SSH 执行：sed -i 's/\"run-as\": \"package\"/\"run-as\": \"root\"/' "
-                "/var/packages/FileSync/conf/privilege && synopkg restart FileSync ；"
-                "② File Station 给 filesync 授予该文件夹（含子文件夹）读写权限" % detail)
+            return ("没有权限写入备份目录（%s）。root 也写不进去，多为目录/上级的 ACL 限制——"
+                    "请给 root（或 Everyone）读写，或换到普通共享文件夹" % detail)
+        if owner is not None and owner != uid:
+            return ("没有权限写入备份目录（%s）。这个目录不是本套件创建的（属主不是 filesync），"
+                    "ACL 也没真正把写权限给到 filesync。最简单的办法：在 File Station 里**删掉这个空目录**，"
+                    "重新填同样的路径点备份，让套件自己建（属主就是 filesync，必然可写）。"
+                    "也可以给 filesync 授予该目录读写，或把 run-as 改成 root" % detail)
+        return ("没有权限写入备份目录（%s）。调度进程没以 root 运行，ACL 也未授予 filesync 写权限——"
+                "请给 filesync 授予该目录（含子文件夹）读写，或把 run-as 改成 root" % detail)
     return "打包失败：%s" % exc
 
 
