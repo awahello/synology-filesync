@@ -134,10 +134,24 @@ def _os_error_text(exc, target_dir):
         return ("备份目录空间不足或用户配额已满%s。请清理空间、把「保留份数」调小，"
                 "或把备份目录换到空间更大的卷" % extra)
     if code in (1, 13):  # EPERM / EACCES
-        return ("没有权限写入备份目录：调度进程没以 root 运行。两种修法任选其一——"
-                "① SSH 登录群晖执行：sed -i 's/\"run-as\": \"package\"/\"run-as\": \"root\"/' "
+        try:
+            uid = os.geteuid()
+        except AttributeError:  # pragma: no cover
+            uid = -1
+        detail = "当前进程 uid=%d" % uid
+        try:
+            st = os.stat(target_dir)
+            detail += "，目标目录属主 uid=%d、权限 %o" % (st.st_uid, st.st_mode & 0o777)
+        except OSError:
+            pass
+        if uid == 0:
+            return ("没有权限写入备份目录（%s）。root 也写不进去，通常是目录或其上级的 ACL 限制——"
+                    "请在该文件夹「属性→权限」里给 root（或 Everyone）读写，"
+                    "或把备份目录换到 /volume1 下的普通共享文件夹" % detail)
+        return ("没有权限写入备份目录（%s）。调度进程没以 root 运行，两种修法任选其一——"
+                "① SSH 执行：sed -i 's/\"run-as\": \"package\"/\"run-as\": \"root\"/' "
                 "/var/packages/FileSync/conf/privilege && synopkg restart FileSync ；"
-                "② 在 File Station 里给 filesync 用户授予该文件夹读写权限")
+                "② File Station 给 filesync 授予该文件夹（含子文件夹）读写权限" % detail)
     return "打包失败：%s" % exc
 
 
@@ -256,6 +270,10 @@ def create_archive(source, target_dir, keep=7, excludes=(), fmt=DEFAULT_FORMAT):
     if free is not None and free < 2 * 1024 * 1024:
         raise ArchiveError("备份目录空间不足（仅剩 %s），请清理空间或换到更大的卷"
                            % common.human_size(free))
+
+    # 写权限预检：目录存在但当前进程写不进去时，提前给出带 uid/属主的明确提示
+    if not os.access(target_dir, os.W_OK | os.X_OK):
+        raise ArchiveError(_os_error_text(PermissionError(13, "Permission denied"), target_dir))
 
     final = os.path.join(target_dir, archive_name(source, fmt))
     temp = final + ".part"

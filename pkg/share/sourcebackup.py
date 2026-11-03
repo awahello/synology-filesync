@@ -104,7 +104,7 @@ def _ensure_target(target):
     try:
         os.makedirs(target, exist_ok=True)
     except PermissionError:
-        raise BackupError("没有权限创建备份目录 %s（调度进程需要以 root 运行）" % target)
+        raise BackupError(archive._os_error_text(PermissionError(13, "Permission denied"), target))
     except OSError as exc:
         raise BackupError("无法创建备份目录 %s：%s" % (target, exc))
     try:
@@ -113,6 +113,8 @@ def _ensure_target(target):
         free = None
     if free is not None and free < 2 * 1024 * 1024:
         raise BackupError("备份目录空间不足（仅剩 %s）" % common.human_size(free))
+    if not os.access(target, os.W_OK | os.X_OK):
+        raise BackupError(archive._os_error_text(PermissionError(13, "Permission denied"), target))
     return target
 
 
